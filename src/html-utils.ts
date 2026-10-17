@@ -64,12 +64,12 @@ export function maskHtmlRegions(
     // 2. CDATA sections: <![CDATA[ ... ]]>
     /<!\[CDATA\[[^\]]*(?:\](?!\]>)[^\]]*)*\]\]>/g,
     // 3. Raw textarea elements (content is treated as literal text by browsers)
-    /<textarea\b[\s\S]*?<\/textarea>/gi,
+    /<textarea\b[\s\S]*?<\/textarea[^>]*>/gi,
   ];
 
   if (options.maskScripts) {
     // 4. Script elements (to prevent style regexes from matching JS string literals)
-    patterns.push(/<script\b[\s\S]*?<\/script>/gi);
+    patterns.push(/<script\b[\s\S]*?<\/script[^>]*>/gi);
   }
 
   let masked = html;
