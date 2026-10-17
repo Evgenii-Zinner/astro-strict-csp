@@ -267,7 +267,7 @@ export function extractInlineScriptsFromHtml(
   let processedHtml = masked;
 
   processedHtml = processedHtml.replace(
-    /<script\b([^>]*?)>([\s\S]*?)<\/script>/gi,
+    /<script\b([^>]*?)>([\s\S]*?)<\/script[^>]*>/gi,
     (match, attrs, content) => {
       // If it already has src, leave it alone
       if (/(?<![\w\-:])src=/i.test(attrs)) {
