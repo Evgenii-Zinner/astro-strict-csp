@@ -136,28 +136,32 @@ export function extractInlineStylesFromHtml(
 
   // 1. Extract <style>...</style> tags
   if (extractStyleTags && /<style\b/i.test(processedHtml)) {
-    processedHtml = processedHtml.replace(
-      /<style\b([^>]*?)>([\s\S]*?)<\/style>/gi,
-      (match, attrs, content) => {
-        // Allow opting out via data-preserve or data-csp-ignore
-        if (/(?<![\w\-:])data-(?:preserve|csp-ignore)/i.test(attrs)) {
-          return match;
-        }
+    let previousHtml: string;
+    do {
+      previousHtml = processedHtml;
+      processedHtml = processedHtml.replace(
+        /<style\b([^>]*?)>([\s\S]*?)<\/style[^>]*>/gi,
+        (match, attrs, content) => {
+          // Allow opting out via data-preserve or data-csp-ignore
+          if (/(?<![\w\-:])data-(?:preserve|csp-ignore)/i.test(attrs)) {
+            return match;
+          }
 
-        const trimmed = content.trim();
-        if (trimmed) {
-          // If the style tag had a media query attribute (e.g. media="print"), preserve it in external CSS
-          const mediaMatch = attrs.match(/(?<![\w\-:])media=(?:"([^"]*)"|'([^']*)')/i);
-          const media = mediaMatch ? (mediaMatch[1] ?? mediaMatch[2]).trim() : '';
+          const trimmed = content.trim();
+          if (trimmed) {
+            // If the style tag had a media query attribute (e.g. media="print"), preserve it in external CSS
+            const mediaMatch = attrs.match(/(?<![\w\-:])media=(?:"([^"]*)"|'([^']*)')/i);
+            const media = mediaMatch ? (mediaMatch[1] ?? mediaMatch[2]).trim() : '';
 
-          const rule = media ? `@media ${media} {\n${trimmed}\n}` : trimmed;
-          state.rawStyles.add(rule);
-          modified = true;
-          hasExtractedStyles = true;
-        }
-        return '';
-      },
-    );
+            const rule = media ? `@media ${media} {\n${trimmed}\n}` : trimmed;
+            state.rawStyles.add(rule);
+            modified = true;
+            hasExtractedStyles = true;
+          }
+          return '';
+        },
+      );
+    } while (processedHtml !== previousHtml && /<style\b/i.test(processedHtml));
   }
 
   // 2. Extract style="..." attributes from HTML / SVG / Web Component tags
