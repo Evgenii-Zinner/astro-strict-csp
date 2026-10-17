@@ -46,7 +46,7 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/Evgenii-Zinner/astro-strict-csp.git"
+    "url": "git+https://github.com/Evgenii-Zinner/astro-strict-csp.git"
   },
   "homepage": "https://github.com/Evgenii-Zinner/astro-strict-csp#readme",
   "bugs": {
