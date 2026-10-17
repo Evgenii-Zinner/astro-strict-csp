@@ -1,0 +1,82 @@
+name: Auto Release & Tag
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: release-main
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Bump Version & Tag
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Determine semver bump and tag
+        id: semver
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          COMMIT_MSG=$(git log -1 --pretty=%B)
+          echo "Latest commit message: $COMMIT_MSG"
+
+          # Skip if this commit is already an automated release
+          if echo "$COMMIT_MSG" | grep -qE "chore\(release\)|\[skip ci\]"; then
+            echo "Skipping release: Automated release commit detected."
+            echo "should_release=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "should_release=true" >> $GITHUB_OUTPUT
+
+          # Determine bump type based on conventional commits
+          if echo "$COMMIT_MSG" | grep -qE "(BREAKING CHANGE|!:)"; then
+            BUMP="major"
+          elif echo "$COMMIT_MSG" | grep -qE "^feat(\(.*\))?:"; then
+            BUMP="minor"
+          else
+            BUMP="patch"
+          fi
+
+          echo "Semver bump type: $BUMP"
+          NEW_VERSION=$(npm version $BUMP --no-git-tag-version)
+          TAG_NAME="v${NEW_VERSION#v}"
+          echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
+
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          git add package.json package-lock.json
+          git commit -m "chore(release): ${TAG_NAME} [skip ci]"
+          git tag "$TAG_NAME"
+          git push origin main --follow-tags
+
+          gh release create "$TAG_NAME" --title "${TAG_NAME}" --generate-notes
+
+      - name: Publish to npm (if NPM_TOKEN is provided)
+        if: steps.semver.outputs.should_release == 'true' && env.NPM_TOKEN != ''
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+          NPM_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          npm run prepublishOnly
+          npm publish --access public

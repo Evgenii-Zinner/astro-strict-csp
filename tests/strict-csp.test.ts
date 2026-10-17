@@ -57,8 +57,8 @@ describe('astro-strict-csp Comprehensive Test Suite', () => {
       const classCustom = computeCssClass(rule, 'my-prefix-');
       expect(classCustom).toMatch(/^my-prefix-[0-9a-f]{6}$/);
 
-      // Trailing semicolons and whitespace normalization
-      expect(computeCssClass('color: #ff0000')).toBe(computeCssClass('  color: #ff0000;  '));
+      // Leading, trailing semicolons and whitespace normalization
+      expect(computeCssClass('color: #ff0000')).toBe(computeCssClass('  ;;;color: #ff0000;;;  '));
     });
 
     it('computes content hashes from string and Buffer with custom lengths', () => {
@@ -98,6 +98,18 @@ describe('astro-strict-csp Comprehensive Test Suite', () => {
 
       const restored = unmask(masked);
       expect(restored).toBe(input);
+    });
+
+    it('handles unclosed comments and CDATA sections gracefully', () => {
+      const unclosedComment = '<div><!-- unclosed comment content';
+      const resultComment = maskHtmlRegions(unclosedComment);
+      expect(resultComment.masked).toBe(unclosedComment);
+      expect(resultComment.unmask(resultComment.masked)).toBe(unclosedComment);
+
+      const unclosedCdata = '<div><![CDATA[ unclosed CDATA content';
+      const resultCdata = maskHtmlRegions(unclosedCdata);
+      expect(resultCdata.masked).toBe(unclosedCdata);
+      expect(resultCdata.unmask(resultCdata.masked)).toBe(unclosedCdata);
     });
 
     it('masks scripts when maskScripts: true', () => {
@@ -141,7 +153,7 @@ describe('astro-strict-csp Comprehensive Test Suite', () => {
     it('extracts style attributes and updates classes with cache hits', () => {
       const state = createStyleExtractionState('is-');
       const inputHtml = `
-        <div style="color: red;">First</div>
+        <div style=";;color: red;;">First</div>
         <div style="color: red;">Second identical</div>
         <span class="badge" style="color: blue;">Third with class</span>
         <button class='btn' style='color: green;'>Fourth single quote</button>

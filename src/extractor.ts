@@ -122,7 +122,9 @@ export function extractInlineStylesFromHtml(
   let processedHtml = masked;
 
   function getClassForStyle(styleStr: string): string {
-    const trimmed = styleStr.trim().replace(/^;+|;+$/g, '');
+    let trimmed = styleStr.trim();
+    while (trimmed.startsWith(';')) trimmed = trimmed.slice(1);
+    while (trimmed.endsWith(';')) trimmed = trimmed.slice(0, -1);
     const existing = state.styleToClass.get(trimmed);
     if (existing) {
       return existing;
@@ -168,10 +170,10 @@ export function extractInlineStylesFromHtml(
 
       const rawStyleVal = styleMatch[1] ?? styleMatch[2];
       // Decode HTML entities (e.g. &quot; -> ", &apos; -> ') and strip outer semicolons
-      const cleanStyleVal = decodeHtmlEntities(rawStyleVal)
-        .trim()
-        .replace(/^;+|;+$/g, '')
-        .trim();
+      let cleanStyleVal = decodeHtmlEntities(rawStyleVal).trim();
+      while (cleanStyleVal.startsWith(';')) cleanStyleVal = cleanStyleVal.slice(1);
+      while (cleanStyleVal.endsWith(';')) cleanStyleVal = cleanStyleVal.slice(0, -1);
+      cleanStyleVal = cleanStyleVal.trim();
 
       // Safely remove the style="..." attribute without modifying whitespace inside other attributes
       const styleIndex = attrs.indexOf(styleMatch[0]);
