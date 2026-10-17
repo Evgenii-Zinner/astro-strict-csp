@@ -62,11 +62,11 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
-    "@types/node": "^22.13.0",
+    "@types/node": "^26.6.5",
     "@vitest/coverage-v8": "^5.0.5",
     "astro": "^7.4.0",
-    "tsup": "^8.3.6",
-    "typescript": "^5.7.3",
+    "tsup": "^9.0.0",
+    "typescript": "^7.0.2",
     "vitest": "^5.0.5"
   }
 }
