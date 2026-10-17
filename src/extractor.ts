@@ -270,50 +270,54 @@ export function extractInlineScriptsFromHtml(
   const { masked, unmask } = maskHtmlRegions(html, { maskScripts: false });
   let processedHtml = masked;
 
-  processedHtml = processedHtml.replace(
-    /<script\b([^>]*?)>([\s\S]*?)<\/script[^>]*>/gi,
-    (match, attrs, content) => {
-      // If it already has src, leave it alone
-      if (/(?<![\w\-:])src=/i.test(attrs)) {
-        return match;
-      }
+  let previousHtml: string;
+  do {
+    previousHtml = processedHtml;
+    processedHtml = processedHtml.replace(
+      /<script\b([^>]*?)>([\s\S]*?)<\/script[^>]*>/gi,
+      (match, attrs, content) => {
+        // If it already has src, leave it alone
+        if (/(?<![\w\-:])src=/i.test(attrs)) {
+          return match;
+        }
 
-      // Skip scripts marked with data-preserve or data-csp-ignore
-      if (/(?<![\w\-:])data-(?:preserve|csp-ignore)/i.test(attrs)) {
-        return match;
-      }
+        // Skip scripts marked with data-preserve or data-csp-ignore
+        if (/(?<![\w\-:])data-(?:preserve|csp-ignore)/i.test(attrs)) {
+          return match;
+        }
 
-      // Check script type (skip JSON-LD, importmaps, client templates, etc.)
-      const typeMatch = attrs.match(/(?<![\w\-:])type=(?:"([^"]*)"|'([^']*)')/i);
-      const typeVal = typeMatch ? (typeMatch[1] ?? typeMatch[2]) : undefined;
-      if (!isExecutableScriptType(typeVal, ignoreTypes)) {
-        return match;
-      }
+        // Check script type (skip JSON-LD, importmaps, client templates, etc.)
+        const typeMatch = attrs.match(/(?<![\w\-:])type=(?:"([^"]*)"|'([^']*)')/i);
+        const typeVal = typeMatch ? (typeMatch[1] ?? typeMatch[2]) : undefined;
+        if (!isExecutableScriptType(typeVal, ignoreTypes)) {
+          return match;
+        }
 
-      const trimmed = content.trim();
-      if (!trimmed) {
-        // Empty script tag, remove it
+        const trimmed = content.trim();
+        if (!trimmed) {
+          // Empty script tag, remove it
+          modified = true;
+          return '';
+        }
+
+        // Hash script content
+        const hash = computeContentHash(trimmed, 8);
+        const filename = `${filePrefix}${hash}.js`;
+        scripts.push({
+          filename,
+          content: trimmed,
+        });
+
+        const cleanAttrs = attrs.trim();
+        const hasType = /(?<![\w\-:])type=/i.test(cleanAttrs);
+        const moduleAttr = asModule && !hasType ? ' type="module"' : '';
+        const spacer = cleanAttrs ? ` ${cleanAttrs}` : '';
         modified = true;
-        return '';
-      }
 
-      // Hash script content
-      const hash = computeContentHash(trimmed, 8);
-      const filename = `${filePrefix}${hash}.js`;
-      scripts.push({
-        filename,
-        content: trimmed,
-      });
-
-      const cleanAttrs = attrs.trim();
-      const hasType = /(?<![\w\-:])type=/i.test(cleanAttrs);
-      const moduleAttr = asModule && !hasType ? ' type="module"' : '';
-      const spacer = cleanAttrs ? ` ${cleanAttrs}` : '';
-      modified = true;
-
-      return `<script src="/${assetsDir}/${filename}"${moduleAttr}${spacer}></script>`;
-    },
-  );
+        return `<script src="/${assetsDir}/${filename}"${moduleAttr}${spacer}></script>`;
+      },
+    );
+  } while (processedHtml !== previousHtml && /<script\b/i.test(processedHtml));
 
   return {
     html: modified ? unmask(processedHtml) : html,
