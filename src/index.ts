@@ -187,10 +187,9 @@ export default function strictCsp(options: StrictCspOptions = {}): AstroIntegrat
 
               if (needsStylesheet) {
                 const escapedHref = stylesheetHref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-                const hasLinkTag = new RegExp(
-                  `<link\\b[^>]*href=["']${escapedHref}["']`,
-                  'i',
-                ).test(page.html);
+                const hasLinkTag = new RegExp(`<link\\b[^>]*href=["']${escapedHref}["']`, 'i').test(
+                  page.html,
+                );
 
                 if (!hasLinkTag && page.html.includes('</head>')) {
                   page.html = page.html.replace(
