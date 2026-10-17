@@ -60,9 +60,9 @@ export function maskHtmlRegions(
 
   const patterns: RegExp[] = [
     // 1. HTML comments: <!-- ... -->
-    /<!--[\s\S]*?-->/g,
+    /<!--[^-]*(?:-(?!->)[^-]*)*-->/g,
     // 2. CDATA sections: <![CDATA[ ... ]]>
-    /<!\[CDATA\[[\s\S]*?\]\]>/g,
+    /<!\[CDATA\[[^\]]*(?:\](?!\]>)[^\]]*)*\]\]>/g,
     // 3. Raw textarea elements (content is treated as literal text by browsers)
     /<textarea\b[\s\S]*?<\/textarea>/gi,
   ];
