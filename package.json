@@ -1,6 +1,6 @@
 {
   "name": "astro-strict-csp",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Zero-dependency Astro integration for strict Content Security Policy (zero 'unsafe-inline'), inline style and script extraction, bundling, Subresource Integrity (SRI) hashing, and CSP enforcement.",
   "type": "module",
   "main": "./dist/index.cjs",
