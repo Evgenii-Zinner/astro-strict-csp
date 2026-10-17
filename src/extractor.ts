@@ -75,7 +75,7 @@ export function createStyleExtractionState(_classPrefix = 'is-'): StyleExtractio
 }
 
 // Regex matching opening HTML/SVG/custom elements, safely handling quoted attribute values containing '>' or '/'
-const TAG_RE = /<([a-zA-Z][a-zA-Z0-9\-:]*)(\s+(?:"[^"]*"|'[^']*'|[^>"'/]|\/(?!>))*?)(\s*\/?)>/gi;
+const TAG_RE = /<([\w\-:]+)(\s+(?:[^>"'/]+|"[^"]*"|'[^']*'|\/(?!>))*?)(\s*\/?)>/gi;
 // Regex matching style attribute with double or single quotes and escaped characters
 const STYLE_ATTR_RE = /(?<![\w\-:])style=(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/i;
 // Regex matching class attribute
@@ -122,7 +122,9 @@ export function extractInlineStylesFromHtml(
   let processedHtml = masked;
 
   function getClassForStyle(styleStr: string): string {
-    const trimmed = styleStr.trim().replace(/^;+|;+$/g, '');
+    let trimmed = styleStr.trim();
+    while (trimmed.startsWith(';')) trimmed = trimmed.slice(1);
+    while (trimmed.endsWith(';')) trimmed = trimmed.slice(0, -1);
     const existing = state.styleToClass.get(trimmed);
     if (existing) {
       return existing;
@@ -136,32 +138,28 @@ export function extractInlineStylesFromHtml(
 
   // 1. Extract <style>...</style> tags
   if (extractStyleTags && /<style\b/i.test(processedHtml)) {
-    let previousHtml: string;
-    do {
-      previousHtml = processedHtml;
-      processedHtml = processedHtml.replace(
-        /<style\b([^>]*?)>([\s\S]*?)<\/style(?:[\s/][^>]*)?>/gi,
-        (match, attrs, content) => {
-          // Allow opting out via data-preserve or data-csp-ignore
-          if (/(?<![\w\-:])data-(?:preserve|csp-ignore)/i.test(attrs)) {
-            return match;
-          }
+    processedHtml = processedHtml.replace(
+      /<style\b([^>]*?)>([\s\S]*?)<\/style>/gi,
+      (match, attrs, content) => {
+        // Allow opting out via data-preserve or data-csp-ignore
+        if (/(?<![\w\-:])data-(?:preserve|csp-ignore)/i.test(attrs)) {
+          return match;
+        }
 
-          const trimmed = content.trim();
-          if (trimmed) {
-            // If the style tag had a media query attribute (e.g. media="print"), preserve it in external CSS
-            const mediaMatch = attrs.match(/(?<![\w\-:])media=(?:"([^"]*)"|'([^']*)')/i);
-            const media = mediaMatch ? (mediaMatch[1] ?? mediaMatch[2]).trim() : '';
+        const trimmed = content.trim();
+        if (trimmed) {
+          // If the style tag had a media query attribute (e.g. media="print"), preserve it in external CSS
+          const mediaMatch = attrs.match(/(?<![\w\-:])media=(?:"([^"]*)"|'([^']*)')/i);
+          const media = mediaMatch ? (mediaMatch[1] ?? mediaMatch[2]).trim() : '';
 
-            const rule = media ? `@media ${media} {\n${trimmed}\n}` : trimmed;
-            state.rawStyles.add(rule);
-            modified = true;
-            hasExtractedStyles = true;
-          }
-          return '';
-        },
-      );
-    } while (processedHtml !== previousHtml && /<style\b/i.test(processedHtml));
+          const rule = media ? `@media ${media} {\n${trimmed}\n}` : trimmed;
+          state.rawStyles.add(rule);
+          modified = true;
+          hasExtractedStyles = true;
+        }
+        return '';
+      },
+    );
   }
 
   // 2. Extract style="..." attributes from HTML / SVG / Web Component tags
@@ -269,54 +267,50 @@ export function extractInlineScriptsFromHtml(
   const { masked, unmask } = maskHtmlRegions(html, { maskScripts: false });
   let processedHtml = masked;
 
-  let previousHtml: string;
-  do {
-    previousHtml = processedHtml;
-    processedHtml = processedHtml.replace(
-      /<script\b([^>]*?)>([\s\S]*?)<\/script(?:[\s/][^>]*)?>/gi,
-      (match, attrs, content) => {
-        // If it already has src, leave it alone
-        if (/(?<![\w\-:])src=/i.test(attrs)) {
-          return match;
-        }
+  processedHtml = processedHtml.replace(
+    /<script\b([^>]*?)>([\s\S]*?)<\/script>/gi,
+    (match, attrs, content) => {
+      // If it already has src, leave it alone
+      if (/(?<![\w\-:])src=/i.test(attrs)) {
+        return match;
+      }
 
-        // Skip scripts marked with data-preserve or data-csp-ignore
-        if (/(?<![\w\-:])data-(?:preserve|csp-ignore)/i.test(attrs)) {
-          return match;
-        }
+      // Skip scripts marked with data-preserve or data-csp-ignore
+      if (/(?<![\w\-:])data-(?:preserve|csp-ignore)/i.test(attrs)) {
+        return match;
+      }
 
-        // Check script type (skip JSON-LD, importmaps, client templates, etc.)
-        const typeMatch = attrs.match(/(?<![\w\-:])type=(?:"([^"]*)"|'([^']*)')/i);
-        const typeVal = typeMatch ? (typeMatch[1] ?? typeMatch[2]) : undefined;
-        if (!isExecutableScriptType(typeVal, ignoreTypes)) {
-          return match;
-        }
+      // Check script type (skip JSON-LD, importmaps, client templates, etc.)
+      const typeMatch = attrs.match(/(?<![\w\-:])type=(?:"([^"]*)"|'([^']*)')/i);
+      const typeVal = typeMatch ? (typeMatch[1] ?? typeMatch[2]) : undefined;
+      if (!isExecutableScriptType(typeVal, ignoreTypes)) {
+        return match;
+      }
 
-        const trimmed = content.trim();
-        if (!trimmed) {
-          // Empty script tag, remove it
-          modified = true;
-          return '';
-        }
-
-        // Hash script content
-        const hash = computeContentHash(trimmed, 8);
-        const filename = `${filePrefix}${hash}.js`;
-        scripts.push({
-          filename,
-          content: trimmed,
-        });
-
-        const cleanAttrs = attrs.trim();
-        const hasType = /(?<![\w\-:])type=/i.test(cleanAttrs);
-        const moduleAttr = asModule && !hasType ? ' type="module"' : '';
-        const spacer = cleanAttrs ? ` ${cleanAttrs}` : '';
+      const trimmed = content.trim();
+      if (!trimmed) {
+        // Empty script tag, remove it
         modified = true;
+        return '';
+      }
 
-        return `<script src="/${assetsDir}/${filename}"${moduleAttr}${spacer}></script>`;
-      },
-    );
-  } while (processedHtml !== previousHtml && /<script\b/i.test(processedHtml));
+      // Hash script content
+      const hash = computeContentHash(trimmed, 8);
+      const filename = `${filePrefix}${hash}.js`;
+      scripts.push({
+        filename,
+        content: trimmed,
+      });
+
+      const cleanAttrs = attrs.trim();
+      const hasType = /(?<![\w\-:])type=/i.test(cleanAttrs);
+      const moduleAttr = asModule && !hasType ? ' type="module"' : '';
+      const spacer = cleanAttrs ? ` ${cleanAttrs}` : '';
+      modified = true;
+
+      return `<script src="/${assetsDir}/${filename}"${moduleAttr}${spacer}></script>`;
+    },
+  );
 
   return {
     html: modified ? unmask(processedHtml) : html,

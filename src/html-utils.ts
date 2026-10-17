@@ -95,12 +95,12 @@ export function maskHtmlRegions(
 
   const patterns: RegExp[] = [
     // 3. Raw textarea elements (content is treated as literal text by browsers)
-    /<textarea\b[\s\S]*?<\/textarea(?:[\s/][^>]*)?>/gi,
+    /<textarea\b[\s\S]*?<\/textarea>/gi,
   ];
 
   if (options.maskScripts) {
     // 4. Script elements (to prevent style regexes from matching JS string literals)
-    patterns.push(/<script\b[\s\S]*?<\/script(?:[\s/][^>]*)?>/gi);
+    patterns.push(/<script\b[\s\S]*?<\/script>/gi);
   }
 
   for (const pattern of patterns) {
