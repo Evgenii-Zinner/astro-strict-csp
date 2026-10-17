@@ -187,11 +187,11 @@ export function injectSriIntoHtml(
       patchedCount++;
 
       // Safely replace closing tag, preserving self-closing slash if present
-      return match.replace(/\s*\/?>$/, (closing) => {
-        const isSlash = closing.trim().startsWith('/');
-        const endTag = isSlash ? ' />' : '>';
-        return ` integrity="${integrity}"${crossOriginAttr}${endTag}`;
-      });
+      const isSelfClosing = match.endsWith('/>') || match.endsWith('/ >');
+      const slashIndex = isSelfClosing ? match.lastIndexOf('/') : match.lastIndexOf('>');
+      const prefix = match.slice(0, slashIndex).trimEnd();
+      const closing = isSelfClosing ? ' />' : '>';
+      return `${prefix} integrity="${integrity}"${crossOriginAttr}${closing}`;
     });
   }
 
