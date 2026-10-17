@@ -75,7 +75,7 @@ export function createStyleExtractionState(_classPrefix = 'is-'): StyleExtractio
 }
 
 // Regex matching opening HTML/SVG/custom elements, safely handling quoted attribute values containing '>' or '/'
-const TAG_RE = /<([\w\-:]+)(\s+(?:[^>"'/]+|"[^"]*"|'[^']*'|\/(?!>))*?)(\s*\/?)>/gi;
+const TAG_RE = /<([\w\-:]+)(\s+(?:"[^"]*"|'[^']*'|[^>"'/]|\/(?!>))*?)(\s*\/?)>/gi;
 // Regex matching style attribute with double or single quotes and escaped characters
 const STYLE_ATTR_RE = /(?<![\w\-:])style=(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/i;
 // Regex matching class attribute
@@ -170,7 +170,8 @@ export function extractInlineStylesFromHtml(
       // Decode HTML entities (e.g. &quot; -> ", &apos; -> ') and strip outer semicolons
       const cleanStyleVal = decodeHtmlEntities(rawStyleVal)
         .trim()
-        .replace(/^;+|;+$/g, '')
+        .replace(/^;+/, '')
+        .replace(/;+$/, '')
         .trim();
 
       // Safely remove the style="..." attribute without modifying whitespace inside other attributes
