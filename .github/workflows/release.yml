@@ -67,8 +67,8 @@ jobs:
 
           git add package.json package-lock.json
           git commit -m "chore(release): ${TAG_NAME} [skip ci]"
-          git tag "$TAG_NAME"
-          git push origin main --follow-tags
+          git tag -a "$TAG_NAME" -m "Release ${TAG_NAME}"
+          git push origin main "$TAG_NAME"
 
           gh release create "$TAG_NAME" --title "${TAG_NAME}" --generate-notes
 
