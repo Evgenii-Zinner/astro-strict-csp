@@ -52,27 +52,57 @@ export interface MaskOptions {
  *
  * @sideeffects None (pure in-memory string transformation).
  */
+function maskByDelimiters(
+  content: string,
+  startDelim: string,
+  endDelim: string,
+  placeholders: string[],
+): string {
+  let result = '';
+  let cursor = 0;
+  while (cursor < content.length) {
+    const startIdx = content.indexOf(startDelim, cursor);
+    if (startIdx === -1) {
+      result += content.slice(cursor);
+      break;
+    }
+    const endIdx = content.indexOf(endDelim, startIdx + startDelim.length);
+    if (endIdx === -1) {
+      result += content.slice(cursor);
+      break;
+    }
+    result += content.slice(cursor, startIdx);
+    const matched = content.slice(startIdx, endIdx + endDelim.length);
+    const idx = placeholders.length;
+    placeholders.push(matched);
+    result += `<!--__CSP_MASK_${idx}__-->`;
+    cursor = endIdx + endDelim.length;
+  }
+  return result;
+}
+
 export function maskHtmlRegions(
   html: string,
   options: MaskOptions = {},
 ): { masked: string; unmask: (content: string) => string } {
   const placeholders: string[] = [];
 
+  // 1. HTML comments: <!-- ... --> (deterministic indexOf search, 0 regex)
+  let masked = maskByDelimiters(html, '<!--', '-->', placeholders);
+
+  // 2. CDATA sections: <![CDATA[ ... ]]> (deterministic indexOf search, 0 regex)
+  masked = maskByDelimiters(masked, '<![CDATA[', ']]>', placeholders);
+
   const patterns: RegExp[] = [
-    // 1. HTML comments: <!-- ... -->
-    /<!--[^-]*(?:-(?!->)[^-]*)*-->/g,
-    // 2. CDATA sections: <![CDATA[ ... ]]>
-    /<!\[CDATA\[[^\]]*(?:\](?!\]>)[^\]]*)*\]\]>/g,
     // 3. Raw textarea elements (content is treated as literal text by browsers)
-    /<textarea\b[\s\S]*?<\/textarea\s*>/gi,
+    /<textarea\b[\s\S]*?<\/textarea(?:[\s/][^>]*)?>/gi,
   ];
 
   if (options.maskScripts) {
     // 4. Script elements (to prevent style regexes from matching JS string literals)
-    patterns.push(/<script\b[\s\S]*?<\/script\s*>/gi);
+    patterns.push(/<script\b[\s\S]*?<\/script(?:[\s/][^>]*)?>/gi);
   }
 
-  let masked = html;
   for (const pattern of patterns) {
     masked = masked.replace(pattern, (match) => {
       const idx = placeholders.length;

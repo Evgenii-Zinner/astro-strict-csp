@@ -75,7 +75,7 @@ export function createStyleExtractionState(_classPrefix = 'is-'): StyleExtractio
 }
 
 // Regex matching opening HTML/SVG/custom elements, safely handling quoted attribute values containing '>' or '/'
-const TAG_RE = /<([\w\-:]+)(\s+(?:"[^"]*"|'[^']*'|[^>"'/]|\/(?!>))*?)(\s*\/?)>/gi;
+const TAG_RE = /<([a-zA-Z][a-zA-Z0-9\-:]*)(\s+(?:"[^"]*"|'[^']*'|[^>"'/]|\/(?!>))*?)(\s*\/?)>/gi;
 // Regex matching style attribute with double or single quotes and escaped characters
 const STYLE_ATTR_RE = /(?<![\w\-:])style=(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/i;
 // Regex matching class attribute
@@ -140,7 +140,7 @@ export function extractInlineStylesFromHtml(
     do {
       previousHtml = processedHtml;
       processedHtml = processedHtml.replace(
-        /<style\b([^>]*?)>([\s\S]*?)<\/style\s*>/gi,
+        /<style\b([^>]*?)>([\s\S]*?)<\/style(?:[\s/][^>]*)?>/gi,
         (match, attrs, content) => {
           // Allow opting out via data-preserve or data-csp-ignore
           if (/(?<![\w\-:])data-(?:preserve|csp-ignore)/i.test(attrs)) {
@@ -273,7 +273,7 @@ export function extractInlineScriptsFromHtml(
   do {
     previousHtml = processedHtml;
     processedHtml = processedHtml.replace(
-      /<script\b([^>]*?)>([\s\S]*?)<\/script\s*>/gi,
+      /<script\b([^>]*?)>([\s\S]*?)<\/script(?:[\s/][^>]*)?>/gi,
       (match, attrs, content) => {
         // If it already has src, leave it alone
         if (/(?<![\w\-:])src=/i.test(attrs)) {
