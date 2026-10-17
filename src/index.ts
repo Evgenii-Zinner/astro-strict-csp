@@ -186,7 +186,13 @@ export default function strictCsp(options: StrictCspOptions = {}): AstroIntegrat
               const needsStylesheet = !injectOnlyWhenUsed || pagesWithExtractedStyles.has(filePath);
 
               if (needsStylesheet) {
-                if (!page.html.includes(stylesheetHref) && page.html.includes('</head>')) {
+                const escapedHref = stylesheetHref.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const hasLinkTag = new RegExp(
+                  `<link\\b[^>]*href=["']${escapedHref}["']`,
+                  'i',
+                ).test(page.html);
+
+                if (!hasLinkTag && page.html.includes('</head>')) {
                   page.html = page.html.replace(
                     '</head>',
                     () => `  <link rel="stylesheet" href="${stylesheetHref}">\n</head>`,

@@ -605,6 +605,29 @@ describe('astro-strict-csp Comprehensive Test Suite', () => {
       expect(p2Processed).toContain('href="/_astro/inline-styles.css"');
     });
 
+    it('injects stylesheet link even when HTML body text contains the stylesheet path string', async () => {
+      const integration = strictCsp({
+        extractScripts: false,
+        sri: false,
+        csp: false,
+      });
+
+      const pPath = path.join(tempDir, 'article.html');
+      fs.writeFileSync(
+        pPath,
+        '<html><head><title>Test</title></head><body><div style="color: blue;">Blue</div><p>We output /_astro/inline-styles.css here</p></body></html>',
+      );
+
+      const doneHook = getHook(integration, 'astro:build:done');
+      await doneHook({
+        dir: new URL(`file://${tempDir}/`),
+        logger: { info: vi.fn() },
+      });
+
+      const processed = fs.readFileSync(pPath, 'utf-8');
+      expect(processed).toContain('<link rel="stylesheet" href="/_astro/inline-styles.css">');
+    });
+
     it('executes full pipeline with all modules enabled (end-to-end integration)', async () => {
       const integration = strictCsp({
         csp: { enabled: true, generateMetaTag: true, generateHeadersFile: true },
