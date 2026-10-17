@@ -140,7 +140,7 @@ export function extractInlineStylesFromHtml(
     do {
       previousHtml = processedHtml;
       processedHtml = processedHtml.replace(
-        /<style\b([^>]*?)>([\s\S]*?)<\/style[^>]*>/gi,
+        /<style\b([^>]*?)>([\s\S]*?)<\/style\s*>/gi,
         (match, attrs, content) => {
           // Allow opting out via data-preserve or data-csp-ignore
           if (/(?<![\w\-:])data-(?:preserve|csp-ignore)/i.test(attrs)) {
@@ -172,11 +172,10 @@ export function extractInlineStylesFromHtml(
 
       const rawStyleVal = styleMatch[1] ?? styleMatch[2];
       // Decode HTML entities (e.g. &quot; -> ", &apos; -> ') and strip outer semicolons
-      const cleanStyleVal = decodeHtmlEntities(rawStyleVal)
-        .trim()
-        .replace(/^;+/, '')
-        .replace(/;+$/, '')
-        .trim();
+      let cleanStyleVal = decodeHtmlEntities(rawStyleVal).trim();
+      while (cleanStyleVal.startsWith(';')) cleanStyleVal = cleanStyleVal.slice(1);
+      while (cleanStyleVal.endsWith(';')) cleanStyleVal = cleanStyleVal.slice(0, -1);
+      cleanStyleVal = cleanStyleVal.trim();
 
       // Safely remove the style="..." attribute without modifying whitespace inside other attributes
       const styleIndex = attrs.indexOf(styleMatch[0]);
@@ -274,7 +273,7 @@ export function extractInlineScriptsFromHtml(
   do {
     previousHtml = processedHtml;
     processedHtml = processedHtml.replace(
-      /<script\b([^>]*?)>([\s\S]*?)<\/script[^>]*>/gi,
+      /<script\b([^>]*?)>([\s\S]*?)<\/script\s*>/gi,
       (match, attrs, content) => {
         // If it already has src, leave it alone
         if (/(?<![\w\-:])src=/i.test(attrs)) {
