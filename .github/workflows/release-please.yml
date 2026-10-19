@@ -31,7 +31,6 @@ jobs:
         with:
           node-version: 22
           cache: npm
-          registry-url: 'https://registry.npmjs.org'
 
       - name: Upgrade npm for OIDC Trusted Publishing
         if: ${{ steps.release.outputs.release_created }}
@@ -43,8 +42,6 @@ jobs:
 
       - name: Publish to npm
         if: ${{ steps.release.outputs.release_created }}
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN || '' }}
         run: |
           npm run prepublishOnly
           npm publish --provenance --access public
