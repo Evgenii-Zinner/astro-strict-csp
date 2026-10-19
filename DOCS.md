@@ -10,6 +10,7 @@
 2. [File-by-File Technical Reference](#2-file-by-file-technical-reference)
    - [`src/index.ts` (Astro Integration Hook)](#srcindexts)
    - [`src/extractor.ts` (Style & Script Extraction Engine)](#srcextractorts)
+   - [`src/events.ts` (Inline Event Extractor & Runtime Dispatcher)](#srceventsts)
    - [`src/html-utils.ts` (Parsing, Masking & Entities)](#srchtml-utilsts)
    - [`src/sri.ts` (Subresource Integrity Engine)](#srcsrits)
    - [`src/csp.ts` (Policy Formatting & Headers)](#srccspts)
@@ -23,7 +24,7 @@
 
 ## 1. Architecture Overview & Pipeline
 
-Modern browser security audits (Mozilla Observatory, Google CSP Evaluator, SOC 2, HIPAA, PCI-DSS) penalize or fail policies containing `'unsafe-inline'`. However, static site generation in Astro frequently emits inline styles (Shiki syntax tokens, component wrappers, SVGs) and inline scripts (hydration islands, telemetry).
+Modern browser security audits (Mozilla Observatory, Google CSP Evaluator, SOC 2, HIPAA, PCI-DSS) penalize or fail policies containing `'unsafe-inline'`. However, static site generation in Astro frequently emits inline styles (Shiki syntax tokens, component wrappers, SVGs), inline scripts (hydration islands, telemetry), and inline event handlers (`onclick`, `onsubmit`).
 
 `astro-strict-csp` runs purely as a post-build transform during the `astro:build:done` lifecycle hook. It loads pages into memory, transforms all markup in a single pass, emits external bundled assets, computes SRI hashes, and injects strict CSP policies.
 
@@ -45,9 +46,16 @@ flowchart TD
         I --> J["Emit dist/_astro/inline-[hash].js Bundles"]
         J --> K["Replace with <script src='/_astro/inline-[hash].js'>"]
     end
+
+    subgraph S25 ["Stage 2.5: Inline Event Extraction"]
+        K --> EV1["Scan for on*='...' Event Handlers"]
+        EV1 --> EV2["Replace with data-csp-on-[event]='evt-[hash]'"]
+        EV2 --> EV3["Deduplicate Code & Emit dist/_astro/events-[hash].js"]
+        EV3 --> EV4["Inject <script src='/_astro/events-[hash].js'>"]
+    end
     
     subgraph S3 ["Stage 3: Subresource Integrity (SRI)"]
-        K --> L["Scan Local <script src> and <link rel='stylesheet'>"]
+        EV4 --> L["Scan Local <script src> (including events.js) and <link rel='stylesheet'>"]
         L --> M["Compute sha384 via Shared Build hashCache"]
         M --> N["Inject integrity='sha384-...' & crossorigin='anonymous'"]
     end
@@ -101,6 +109,26 @@ The core parsing and transformation engine responsible for eliminating inline st
   - Preserves original execution semantics (classic synchronous vs module).
   - Skips non-executable blocks (`application/ld+json`, `importmap`, templates).
   - **Side Effects**: In-memory string transformation. Returns array of script bundles to be written to disk by the caller.
+
+---
+
+### `src/events.ts`
+The inline event handler extraction and runtime dispatcher generation engine.
+
+#### Functions
+- **`createEventExtractionState(): EventExtractionState`**:
+  - Initializes the shared accumulator tracking deduplicated handler code, generated hash IDs, active event names, and extraction count across all pages.
+  - **Side Effects**: In-memory only.
+- **`extractInlineEventsFromHtml(html, state, options): EventExtractionFileResult`**:
+  - Scans tags for `on*="..."` attributes (`onclick`, `onsubmit`, `onchange`, etc.).
+  - Replaces inline event attributes with delegated data attributes (`data-csp-on-[event]="evt-[hash]"`).
+  - Decodes HTML entities in handler values so quotes and entities are valid JS statements.
+  - Respects `data-preserve` and `data-csp-ignore` attributes to opt out specific elements.
+  - **Side Effects**: Mutates `state` in-memory (`state.codeToId`, `state.idToCode`, `state.activeEvents`). Returns modified HTML string. Does not perform disk I/O.
+- **`generateEventDispatcherScript(state): string`**:
+  - Generates the capturing event delegation script mapping event IDs to executable functions.
+  - Attaches listeners to `document` using `{ capture: true }`, ensuring non-bubbling events (`focus`, `blur`, `mouseenter`, `mouseleave`) are intercepted.
+  - Binds `this` to the triggering element (`fn.call(el, e)`), passes the `event` object, and cancels default action if the handler returns `false`.
 
 ---
 
@@ -180,6 +208,7 @@ Fast, zero-dependency hashing built on native `node:crypto`.
 | :--- | :--- | :--- | :--- |
 | **`extractStyles`** | None (in-memory) | Creates `dist/_astro/inline-styles.css` if styles extracted | Removes `style="..."` attributes; adds `.is-[hash]` classes; removes extracted `<style>` tags; injects `<link rel="stylesheet">` |
 | **`extractScripts`** | None (in-memory) | Creates `dist/_astro/inline-[hash].js` per script | Replaces inline `<script>code</script>` with `<script src="/_astro/inline-[hash].js">` |
+| **`extractEvents`** | None (in-memory) | Creates `dist/_astro/events-[hash].js` if handlers extracted | Replaces `on*="..."` attributes with `data-csp-on-[event]="evt-[hash]"`; injects `<script type="module" src="/_astro/events-[hash].js">` |
 | **`sri`** | Reads referenced local `.js` & `.css` files from `dist/` | None | Injects `integrity="sha384-..."` and `crossorigin="anonymous"` into `<script src>` and `<link rel="stylesheet">` |
 | **`csp (meta)`** | None (in-memory) | None | Injects `<meta http-equiv="Content-Security-Policy">` into `<head>` |
 | **`csp (headers)`** | Reads existing `dist/_headers` (if present) | Overwrites or creates `dist/_headers` | None |
@@ -193,9 +222,12 @@ Fast, zero-dependency hashing built on native `node:crypto`.
 | :--- | :--- |
 | **`>` character in attribute values** (`aria-label="A > B"`) | Quote-aware tag matching (`TAG_RE`) parses attribute strings as quoted tokens rather than stopping at the first `>` character. |
 | **Escaped quotes in styles** (`style="font-family: \"Font\""`) | Attribute matcher supports `(?:[^"\\]|\\.)*`, matching escaped quotes without truncating. |
-| **HTML entities in styles** (`&quot;`, `&apos;`, `&amp;`) | Decodes entities via `decodeHtmlEntities()` before computing classes and writing valid CSS declarations. |
+| **HTML entities in styles & events** (`&quot;`, `&apos;`, `&amp;`) | Decodes entities via `decodeHtmlEntities()` before computing classes, writing CSS, or emitting JS handlers. |
 | **Commented-out code** (`<!-- <script>...</script> -->`) | Comments are masked with placeholders before any regex transformations, ensuring inactive markup is untouched. |
 | **Literal code in `<textarea>`** | Content inside `<textarea>` blocks is masked with placeholders to preserve code samples. |
+| **Inline event handlers in code blocks** (`<code><button onclick="foo()"></code>`) | Script blocks and comments are masked during event extraction so documentation and code samples are never rewritten. |
+| **Non-bubbling events** (`focus`, `blur`, `mouseenter`, `mouseleave`) | The event dispatcher listens on `document` with `{ capture: true }`, ensuring non-bubbling events are intercepted during capture phase. |
+| **Native event handler semantics** (`this`, `event`, `return false`) | The dispatcher executes `fn.call(el, e)` to bind `this` to the element, passes `e` as `event`, and cancels the default action if `fn` returns `false`. |
 | **Media queries on `<style>`** (`media="print"`) | Wraps extracted rules in `@media ${media} { ... }` so print or responsive behavior is preserved in external CSS. |
 | **Non-executable scripts** (JSON-LD, `importmap`) | Script extractor checks against HTML5 JavaScript MIME types; structured data and importmaps remain inline. |
 | **Synchronous scripts in `<head>`** (Theme toggles) | Preserves classic execution semantics by default (`asModule: false`), preventing Flash of Unstyled Content (FOUC). |
@@ -204,6 +236,7 @@ Fast, zero-dependency hashing built on native `node:crypto`.
 | **Directory traversal in asset URLs** (`../../etc/passwd`) | `resolveAssetPath()` strictly enforces that resolved paths reside inside `dist/`. |
 | **Duplicate `<style>` tags across pages** | Accumulates raw styles in a `Set<string>`, emitting shared styles only once in `inline-styles.css`. |
 | **Duplicate classes on elements** | Checks existing class lists before appending `.is-[hash]` to prevent duplicate class names. |
+| **Opting out specific elements** | Adding `data-preserve` or `data-csp-ignore` to an element skips extraction for styles and event handlers. |
 | **Dollar signs in injected strings** (`$1`, `$&`) | All `String.prototype.replace()` calls use replacer functions `() => replacement` to avoid regex replacement token bugs. |
 
 ---
@@ -216,6 +249,10 @@ In addition to the Astro integration default export, all modular transformers an
 import {
   extractInlineStylesFromHtml,
   extractInlineScriptsFromHtml,
+  extractInlineEventsFromHtml,
+  generateEventDispatcherScript,
+  createEventExtractionState,
+  createStyleExtractionState,
   injectSriIntoHtml,
   formatCspDirectives,
   injectCspMetaTag,
@@ -225,14 +262,18 @@ import {
   computeContentHash,
   decodeHtmlEntities,
   maskHtmlRegions,
-  createStyleExtractionState,
   DEFAULT_STRICT_CSP_DIRECTIVES,
 } from "astro-strict-csp";
 
-// Example: Manually extract styles and scripts from an HTML string
-const state = createStyleExtractionState("is-");
-const styleResult = extractInlineStylesFromHtml(rawHtml, state);
+// Example: Manually extract styles, scripts, and event handlers
+const styleState = createStyleExtractionState("is-");
+const styleResult = extractInlineStylesFromHtml(rawHtml, styleState);
+
 const scriptResult = extractInlineScriptsFromHtml(styleResult.html);
+
+const eventState = createEventExtractionState();
+const eventResult = extractInlineEventsFromHtml(scriptResult.html, eventState);
+const dispatcherScript = generateEventDispatcherScript(eventState);
 
 // Example: Format custom CSP header
 const policy = formatCspDirectives({

@@ -45,6 +45,15 @@ In standard Astro builds, strict policies break because:
 - Hashes script contents and emits external bundles: `dist/_astro/inline-[hash].js`.
 - Replaces inline tags with `<script src="/_astro/inline-[hash].js" type="module"></script>` (preserving attributes like `async`, `defer`, `id`, `nonce`).
 
+### ⚡ Modular Inline Event Handler Extractor & Runtime Dispatcher
+- Scans for inline HTML event handler attributes (`onclick="..."`, `onsubmit="..."`, `onkeydown="..."`, etc.).
+- Replaces inline handlers with deterministic delegated attributes (`data-csp-on-[event]="evt-[hash]"`).
+- Globally deduplicates identical handler code across all pages.
+- Generates a compact, zero-dependency capturing runtime dispatcher bundle: `dist/_astro/events-[hash].js`.
+- Injects `<script type="module" src="/_astro/events-[hash].js"></script>` into affected pages (or all pages if configured).
+- Automatically picked up and hashed with cryptographic SRI (`integrity="sha384-..."`) by the subsequent SRI stage.
+- Preserves native browser event semantics: `this` bound to the element, `event` passed as argument, `return false` prevents default action, and capture-phase (`{ capture: true }`) interception for non-bubbling events (`focus`, `blur`, `mouseenter`, `mouseleave`).
+
 ### 🛡️ Subresource Integrity (SRI) Hasher
 - Computes cryptographic hashes (`sha384`, `sha256`, or `sha512`) for all local `<script src="...">` tags and `<link rel="stylesheet">` tags.
 - Injects `integrity="sha384-..."` and `crossorigin="anonymous"` into output HTML tags.
@@ -126,7 +135,15 @@ export default defineConfig({
         asModule: true,                      // Add type="module" to extracted scripts
       },
 
-      // 3. Subresource Integrity (SRI)
+      // 3. Event handler extraction (onclick, onsubmit, onkeydown, etc.)
+      extractEvents: {
+        enabled: true,                       // true by default
+        filePrefix: "events-",               // Emitted into dist/_astro/events-[hash].js
+        dataAttributePrefix: "data-csp-on-", // Delegated data attribute prefix (data-csp-on-click="evt-1a2b3c")
+        injectOnlyWhenUsed: true,            // Only inject dispatcher script on pages with event handlers
+      },
+
+      // 4. Subresource Integrity (SRI)
       sri: {
         enabled: true,
         algorithm: "sha384",                 // "sha256" | "sha384" | "sha512"
@@ -135,7 +152,7 @@ export default defineConfig({
         crossorigin: "anonymous",            // "anonymous" | "use-credentials" | false
       },
 
-      // 4. Content Security Policy (Optional)
+      // 5. Content Security Policy (Optional)
       csp: {
         enabled: true,                       // false by default
         generateMetaTag: true,               // Injects <meta> CSP in <head>
@@ -183,12 +200,18 @@ Astro Build Pipeline
        │      ├─ Hash content & write dist/_astro/inline-[hash].js
        │      └─ Replace with <script src="/_astro/inline-[hash].js" type="module">
        │
-       ├─► 4. SRI Injector
-       │      ├─ Find local <script src="..."> and <link rel="stylesheet" href="...">
+       ├─► 4. Inline Event Handler Extractor
+       │      ├─ Find on*="..." attributes (onclick, onsubmit, onkeydown, etc.)
+       │      ├─ Replace with data-csp-on-[event]="evt-[hash]"
+       │      ├─ Deduplicate code globally & write dist/_astro/events-[hash].js
+       │      └─ Inject <script type="module" src="/_astro/events-[hash].js"> on affected pages
+       │
+       ├─► 5. SRI Injector
+       │      ├─ Find local <script src="..."> (including inline & event bundles) and <link rel="stylesheet">
        │      ├─ Calculate sha384(assetBuffer)
        │      └─ Inject integrity="sha384-..." and crossorigin="anonymous"
        │
-       ├─► 5. CSP Enforcer
+       ├─► 6. CSP Enforcer
        │      ├─ Format strict CSP without 'unsafe-inline'
        │      ├─ Inject <meta http-equiv="Content-Security-Policy">
        │      └─ Write dist/_headers (Cloudflare/Netlify)
@@ -207,12 +230,16 @@ In addition to the Astro integration default export, `astro-strict-csp` exports 
 import {
   extractInlineStylesFromHtml,
   extractInlineScriptsFromHtml,
+  extractInlineEventsFromHtml,
+  generateEventDispatcherScript,
+  createEventExtractionState,
   injectSriIntoHtml,
   formatCspDirectives,
   injectCspMetaTag,
   writeHeadersFile,
   computeSriHash,
   computeCssClass,
+  computeContentHash,
   DEFAULT_STRICT_CSP_DIRECTIVES,
 } from "astro-strict-csp";
 ```
@@ -222,7 +249,7 @@ import {
 ## 6. Development & Quality
 
 - **Lint & Format**: `npm run lint` / `npm run lint:fix` / `npm run format` (powered by [Biome](https://biomejs.dev))
-- **Test Suite**: `npm run test` / `npm run test:coverage` (35 passing tests, >97% coverage via [Vitest](https://vitest.dev))
+- **Test Suite**: `npm run test` / `npm run test:coverage` (47 passing tests, >98% coverage via [Vitest](https://vitest.dev))
 - **Build**: `npm run build` (ESM, CJS, and DTS bundles via [tsup](https://tsup.egoist.dev))
 - **Pre-publish Validation**: `npm run prepublishOnly` (runs Biome check, rebuilds bundles, and runs test suite)
 
