@@ -44,10 +44,10 @@ export function createEventExtractionState(): EventExtractionState {
 }
 
 // Regex matching opening HTML/SVG/custom elements, safely handling quoted attribute values
-const TAG_RE = /<([\w\-:]+)(\s+(?:[^>"'/]+|"[^"]*"|'[^']*'|\/(?!>))*?)(\s*\/?)>/gi;
+const TAG_RE = /<([a-zA-Z][a-zA-Z0-9\-:]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/gi;
 
 // Regex matching individual on<event>= attributes within element tag attributes
-const EVENT_ATTR_RE = /(?<![\w\-:])on([a-zA-Z]+)=(?:"((?:[^"\\]|\\.)*)"|'((?:[^'\\]|\\.)*)')/gi;
+const EVENT_ATTR_RE = /(?<![\w\-:])on([a-zA-Z]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
 
 /**
  * Extracts inline event handlers (`onclick`, `onsubmit`, `onchange`, etc.) from an HTML string.
@@ -83,7 +83,7 @@ export function extractInlineEventsFromHtml(
   const { masked, unmask } = maskHtmlRegions(html, { maskScripts: true });
   let processedHtml = masked;
 
-  processedHtml = processedHtml.replace(TAG_RE, (match, tag, attrs, closing) => {
+  processedHtml = processedHtml.replace(TAG_RE, (match, tag, attrs) => {
     // Quick check if this specific tag has any on* attributes
     if (!/(?<![\w\-:])on[a-zA-Z]+=/i.test(attrs)) {
       return match;
@@ -121,7 +121,7 @@ export function extractInlineEventsFromHtml(
     );
 
     modified = true;
-    return `<${tag}${newAttrs}${closing}>`;
+    return `<${tag}${newAttrs}>`;
   });
 
   return {
