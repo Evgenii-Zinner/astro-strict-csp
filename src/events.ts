@@ -43,8 +43,8 @@ export function createEventExtractionState(): EventExtractionState {
   };
 }
 
-// Regex matching opening HTML/SVG/custom elements, safely handling quoted attribute values
-const TAG_RE = /<([a-zA-Z][a-zA-Z0-9\-:]*)((?:[^>"']|"[^"]*"|'[^']*')*)>/gi;
+// Regex matching opening HTML/SVG/custom elements with attributes
+const TAG_RE = /<([a-zA-Z][a-zA-Z0-9\-:]*)(\s+[^>]*)>/gi;
 
 // Regex matching individual on<event>= attributes within element tag attributes
 const EVENT_ATTR_RE = /(?<![\w\-:])on([a-zA-Z]+)\s*=\s*(?:"([^"]*)"|'([^']*)')/gi;
