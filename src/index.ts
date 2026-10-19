@@ -2,12 +2,18 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { AstroIntegration } from 'astro';
+import { computeContentHash } from './crypto.js';
 import {
   DEFAULT_STRICT_CSP_DIRECTIVES,
   formatCspDirectives,
   injectCspMetaTag,
   writeHeadersFile,
 } from './csp.js';
+import {
+  createEventExtractionState,
+  extractInlineEventsFromHtml,
+  generateEventDispatcherScript,
+} from './events.js';
 import {
   createStyleExtractionState,
   extractInlineScriptsFromHtml,
@@ -16,6 +22,7 @@ import {
 import { injectSriIntoHtml } from './sri.js';
 import type {
   CspOptions,
+  ExtractEventsOptions,
   ExtractScriptsOptions,
   ExtractStylesOptions,
   SriOptions,
@@ -24,6 +31,7 @@ import type {
 
 export * from './crypto.js';
 export * from './csp.js';
+export * from './events.js';
 export * from './extractor.js';
 export * from './html-utils.js';
 export * from './sri.js';
@@ -97,6 +105,13 @@ export default function strictCsp(options: StrictCspOptions = {}): AstroIntegrat
       ? false
       : typeof options.extractScripts === 'object'
         ? options.extractScripts
+        : {};
+
+  const eventsOpt: ExtractEventsOptions | false =
+    options.extractEvents === false
+      ? false
+      : typeof options.extractEvents === 'object'
+        ? options.extractEvents
         : {};
 
   const sriOpt: SriOptions | false =
@@ -241,6 +256,80 @@ export default function strictCsp(options: StrictCspOptions = {}): AstroIntegrat
 
             logger.info(
               `Extracted ${allExtractedScripts.size} unique inline script(s) (${totalExtractedScriptsCount} instances) into external files in ${assetsDir}/.`,
+            );
+          }
+        }
+
+        // ============================================================
+        // 2.5. EXTRACT INLINE EVENT HANDLERS (onclick, onsubmit, etc.)
+        // ============================================================
+        if (eventsOpt !== false && eventsOpt.enabled !== false) {
+          const filePrefix = eventsOpt.filePrefix || 'events-';
+          const dataAttributePrefix = eventsOpt.dataAttributePrefix || 'data-csp-on-';
+          const injectOnlyWhenUsed = eventsOpt.injectOnlyWhenUsed !== false;
+
+          const state = createEventExtractionState();
+          const pagesWithExtractedEvents = new Set<string>();
+
+          for (const [filePath, page] of pageMap.entries()) {
+            const result = extractInlineEventsFromHtml(page.html, state, {
+              ...eventsOpt,
+              dataAttributePrefix,
+            });
+
+            if (result.hasExtractedEvents) {
+              pagesWithExtractedEvents.add(filePath);
+            }
+
+            if (result.modified) {
+              page.html = result.html;
+              page.modified = true;
+            }
+          }
+
+          if (state.idToCode.size > 0) {
+            if (!fs.existsSync(astroDir)) {
+              fs.mkdirSync(astroDir, { recursive: true });
+            }
+
+            const dispatcherCode = generateEventDispatcherScript(state, dataAttributePrefix);
+            const contentHash = computeContentHash(dispatcherCode, 8);
+            const dispatcherFileName = `${filePrefix}${contentHash}.js`;
+            const dispatcherPath = path.join(astroDir, dispatcherFileName);
+            fs.writeFileSync(dispatcherPath, dispatcherCode, 'utf-8');
+
+            const dispatcherSrc = `/${assetsDir}/${dispatcherFileName}`;
+
+            for (const [filePath, page] of pageMap.entries()) {
+              const needsDispatcher = !injectOnlyWhenUsed || pagesWithExtractedEvents.has(filePath);
+
+              if (needsDispatcher) {
+                const escapedSrc = dispatcherSrc.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+                const hasScriptTag = new RegExp(
+                  `<script\\b[^>]*src=["']${escapedSrc}["']`,
+                  'i',
+                ).test(page.html);
+
+                if (!hasScriptTag) {
+                  if (page.html.includes('</head>')) {
+                    page.html = page.html.replace(
+                      '</head>',
+                      () => `  <script src="${dispatcherSrc}" defer></script>\n</head>`,
+                    );
+                    page.modified = true;
+                  } else if (page.html.includes('</body>')) {
+                    page.html = page.html.replace(
+                      '</body>',
+                      () => `  <script src="${dispatcherSrc}" defer></script>\n</body>`,
+                    );
+                    page.modified = true;
+                  }
+                }
+              }
+            }
+
+            logger.info(
+              `Extracted ${state.idToCode.size} unique event handler(s) (${state.extractedEventCount} instances across ${state.activeEvents.size} event types) into ${assetsDir}/${dispatcherFileName}.`,
             );
           }
         }
