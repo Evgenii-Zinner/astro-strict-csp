@@ -6,11 +6,14 @@ import strictCsp, {
   computeContentHash,
   computeCssClass,
   computeSriHash,
+  createEventExtractionState,
   createStyleExtractionState,
   decodeHtmlEntities,
+  extractInlineEventsFromHtml,
   extractInlineScriptsFromHtml,
   extractInlineStylesFromHtml,
   formatCspDirectives,
+  generateEventDispatcherScript,
   injectCspMetaTag,
   injectSriIntoHtml,
   isExecutableScriptType,
@@ -300,6 +303,155 @@ describe('astro-strict-csp Comprehensive Test Suite', () => {
       const result = extractInlineScriptsFromHtml(inputHtml);
       expect(result.modified).toBe(false);
       expect(result.scripts.length).toBe(0);
+    });
+  });
+
+  // =========================================================================
+  // 4.5. INLINE EVENT HANDLER EXTRACTION
+  // =========================================================================
+  describe('Inline Event Handler Extraction', () => {
+    it('extracts inline event handlers and deduplicates identical code across elements', () => {
+      const state = createEventExtractionState();
+      const inputHtml = `
+        <div class="container">
+          <button onclick="window.print()" class="btn">Print 1</button>
+          <button onclick="window.print()">Print 2</button>
+          <a href="#" onclick="doSomething(event)">Link</a>
+        </div>
+      `;
+
+      const result = extractInlineEventsFromHtml(inputHtml, state);
+      expect(result.modified).toBe(true);
+      expect(result.hasExtractedEvents).toBe(true);
+      expect(result.html).toContain('<div class="container">');
+      expect(result.html).not.toContain('onclick=');
+
+      // Deduplication: 2 identical print buttons share the exact same handler ID
+      const printId = state.codeToId.get('window.print()') ?? '';
+      expect(printId).toMatch(/^evt-[0-9a-f]{6}$/);
+      expect(result.html.match(new RegExp(`data-csp-on-click="${printId}"`, 'g'))).toHaveLength(2);
+
+      // Distinct handler for link
+      const linkId = state.codeToId.get('doSomething(event)') ?? '';
+      expect(result.html).toContain(`data-csp-on-click="${linkId}"`);
+
+      expect(state.idToCode.size).toBe(2);
+      expect(state.extractedEventCount).toBe(3);
+      expect(state.activeEvents.has('click')).toBe(true);
+    });
+
+    it('handles multiple different event handlers on the same element', () => {
+      const state = createEventExtractionState();
+      const inputHtml = `<input type="text" oninput="updateVal()" onchange="saveVal()">`;
+
+      const result = extractInlineEventsFromHtml(inputHtml, state);
+      expect(result.modified).toBe(true);
+      expect(result.hasExtractedEvents).toBe(true);
+      expect(result.html).not.toContain('oninput=');
+      expect(result.html).not.toContain('onchange=');
+
+      expect(result.html).toMatch(/data-csp-on-input="evt-[0-9a-f]{6}"/);
+      expect(result.html).toMatch(/data-csp-on-change="evt-[0-9a-f]{6}"/);
+
+      expect(state.activeEvents.has('input')).toBe(true);
+      expect(state.activeEvents.has('change')).toBe(true);
+    });
+
+    it('decodes HTML entities in event handler attributes', () => {
+      const state = createEventExtractionState();
+      const inputHtml = `<button onclick="alert(&quot;hello &amp; world&quot;);">&#39;Click&#39;</button>`;
+
+      const result = extractInlineEventsFromHtml(inputHtml, state);
+      expect(result.modified).toBe(true);
+
+      const code = state.idToCode.get(Array.from(state.idToCode.keys())[0]);
+      expect(code).toBe('alert("hello & world");');
+    });
+
+    it('supports single quotes and removes empty handlers', () => {
+      const state = createEventExtractionState();
+      const inputHtml = `
+        <button onclick='doSingle()'>Single</button>
+        <form onsubmit="" onreset="   ">Form</form>
+      `;
+
+      const result = extractInlineEventsFromHtml(inputHtml, state);
+      expect(result.modified).toBe(true);
+      expect(result.html).toContain('data-csp-on-click="evt-');
+      expect(result.html).not.toContain('onsubmit');
+      expect(result.html).not.toContain('onreset');
+    });
+
+    it('respects data-preserve and data-csp-ignore on elements', () => {
+      const state = createEventExtractionState();
+      const inputHtml = `
+        <button onclick="keep()" data-preserve>Preserve</button>
+        <button onclick="ignore()" data-csp-ignore>Ignore</button>
+      `;
+
+      const result = extractInlineEventsFromHtml(inputHtml, state);
+      expect(result.modified).toBe(false);
+      expect(result.html).toBe(inputHtml);
+      expect(state.idToCode.size).toBe(0);
+    });
+
+    it('masks comments, CDATA, textareas, and script blocks during event extraction', () => {
+      const state = createEventExtractionState();
+      const inputHtml = `
+        <!-- <button onclick="window.print()">In comment</button> -->
+        <![CDATA[ <button onclick="window.print()">In CDATA</button> ]]>
+        <textarea><button onclick="window.print()">In textarea</button></textarea>
+        <script>const html = '<button onclick="window.print()">In script</button>';</script>
+        <button onclick="window.print()">Real button</button>
+      `;
+
+      const result = extractInlineEventsFromHtml(inputHtml, state);
+      expect(result.modified).toBe(true);
+      expect(state.extractedEventCount).toBe(1);
+
+      // Masked regions are untouched
+      expect(result.html).toContain(
+        '<!-- <button onclick="window.print()">In comment</button> -->',
+      );
+      expect(result.html).toContain(
+        '<![CDATA[ <button onclick="window.print()">In CDATA</button> ]]>',
+      );
+      expect(result.html).toContain(
+        '<textarea><button onclick="window.print()">In textarea</button></textarea>',
+      );
+      expect(result.html).toContain(
+        '<script>const html = \'<button onclick="window.print()">In script</button>\';</script>',
+      );
+      expect(result.html).toContain('data-csp-on-click="evt-');
+    });
+
+    it('returns unchanged HTML when no on* attributes exist', () => {
+      const state = createEventExtractionState();
+      const inputHtml = `<div><span class="badge">Only text</span></div>`;
+
+      const result = extractInlineEventsFromHtml(inputHtml, state);
+      expect(result.modified).toBe(false);
+      expect(result.hasExtractedEvents).toBe(false);
+      expect(result.html).toBe(inputHtml);
+    });
+
+    it('generates a valid, capturing runtime dispatcher script', () => {
+      const state = createEventExtractionState();
+      state.idToCode.set('evt-123456', 'window.print();');
+      state.idToCode.set('evt-abcdef', 'return false;');
+      state.activeEvents.add('click');
+      state.activeEvents.add('submit');
+
+      const script = generateEventDispatcherScript(state);
+      expect(script).toContain('"evt-123456": function(event) {');
+      expect(script).toContain('window.print();');
+      expect(script).toContain('"evt-abcdef": function(event) {');
+      expect(script).toContain('return false;');
+      expect(script).toContain('["click","submit"]');
+      expect(script).toContain('document.addEventListener(eventName, function(e) {');
+      expect(script).toContain('fn.call(el, e)');
+      expect(script).toContain('e.preventDefault();');
+      expect(script).toContain('}, true);');
     });
   });
 
@@ -711,12 +863,13 @@ describe('astro-strict-csp Comprehensive Test Suite', () => {
       const integration = strictCsp({
         extractStyles: false,
         extractScripts: false,
+        extractEvents: false,
         sri: false,
         csp: false,
       });
 
       const pageHtml =
-        '<html><head></head><body><div style="color: red;">Text</div><script>var x = 1;</script></body></html>';
+        '<html><head></head><body><div style="color: red;">Text</div><script>var x = 1;</script><button onclick="window.print()">Print</button></body></html>';
       const pagePath = path.join(tempDir, 'index.html');
       fs.writeFileSync(pagePath, pageHtml);
 
@@ -729,7 +882,84 @@ describe('astro-strict-csp Comprehensive Test Suite', () => {
       const processed = fs.readFileSync(pagePath, 'utf-8');
       expect(processed).toContain('style="color: red;"');
       expect(processed).toContain('<script>var x = 1;</script>');
+      expect(processed).toContain('onclick="window.print()"');
       expect(fs.existsSync(path.join(tempDir, '_headers'))).toBe(false);
+    });
+
+    it('extracts inline event handlers and emits dispatcher bundle with SRI in astro:build:done', async () => {
+      const integration = strictCsp({
+        extractStyles: false,
+        extractScripts: false,
+        extractEvents: true,
+        sri: true,
+        csp: false,
+      });
+
+      const p1Html =
+        '<html><head></head><body><button onclick="window.print()">Print</button></body></html>';
+      const p2Html = '<html><head></head><body><div>No Events</div></body></html>';
+      const p1Path = path.join(tempDir, 'p1.html');
+      const p2Path = path.join(tempDir, 'p2.html');
+      fs.writeFileSync(p1Path, p1Html);
+      fs.writeFileSync(p2Path, p2Html);
+
+      const doneHook = getHook(integration, 'astro:build:done');
+      await doneHook({
+        dir: new URL(`file://${tempDir}/`),
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      });
+
+      const processedP1 = fs.readFileSync(p1Path, 'utf-8');
+      const processedP2 = fs.readFileSync(p2Path, 'utf-8');
+
+      // p1 has onclick replaced with data-csp-on-click
+      expect(processedP1).not.toContain('onclick=');
+      expect(processedP1).toMatch(/data-csp-on-click="evt-[0-9a-f]{6}"/);
+
+      // p1 gets the dispatcher script with SRI integrity hash
+      expect(processedP1).toMatch(
+        /<script src="\/_astro\/events-[0-9a-f]{8}\.js"[^>]*integrity="sha384-[^"]+"[^>]*crossorigin="anonymous"[^>]*><\/script>/,
+      );
+      expect(processedP1).toContain('defer');
+
+      // p2 had no events and injectOnlyWhenUsed: true, so it does not get the script tag
+      expect(processedP2).not.toContain('/_astro/events-');
+    });
+
+    it('injects event dispatcher into all pages when injectOnlyWhenUsed is false', async () => {
+      const integration = strictCsp({
+        extractStyles: false,
+        extractScripts: false,
+        extractEvents: {
+          injectOnlyWhenUsed: false,
+        },
+        sri: false,
+        csp: false,
+      });
+
+      const p1Html =
+        '<html><head></head><body><button onclick="alert(1)">Alert</button></body></html>';
+      const p2Html = '<html><body><div>No head, body only</div></body></html>';
+      const p1Path = path.join(tempDir, 'p1.html');
+      const p2Path = path.join(tempDir, 'p2.html');
+      fs.writeFileSync(p1Path, p1Html);
+      fs.writeFileSync(p2Path, p2Html);
+
+      const doneHook = getHook(integration, 'astro:build:done');
+      await doneHook({
+        dir: new URL(`file://${tempDir}/`),
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      });
+
+      const processedP1 = fs.readFileSync(p1Path, 'utf-8');
+      const processedP2 = fs.readFileSync(p2Path, 'utf-8');
+
+      expect(processedP1).toMatch(
+        /<script src="\/_astro\/events-[0-9a-f]{8}\.js" defer><\/script>/,
+      );
+      expect(processedP2).toMatch(
+        /<script src="\/_astro\/events-[0-9a-f]{8}\.js" defer><\/script>\s*<\/body>/,
+      );
     });
 
     it('exports strictCsp and astroStrictCsp as named exports identical to default export', async () => {

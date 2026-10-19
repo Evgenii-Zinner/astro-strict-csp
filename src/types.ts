@@ -71,6 +71,35 @@ export interface ExtractScriptsOptions {
   asModule?: boolean;
 }
 
+export interface ExtractEventsOptions {
+  /**
+   * Whether inline event handler extraction is enabled.
+   * Automatically extracts `onclick`, `onsubmit`, `onchange`, etc., into an external delegated dispatcher script.
+   * @default true
+   */
+  enabled?: boolean;
+
+  /**
+   * File prefix for generated event dispatcher bundles (e.g. `events-`).
+   * Emitted into the assets directory (e.g. `dist/_astro`).
+   * @default "events-"
+   */
+  filePrefix?: string;
+
+  /**
+   * Prefix for data attributes placed on elements (e.g. `data-csp-on-`).
+   * @default "data-csp-on-"
+   */
+  dataAttributePrefix?: string;
+
+  /**
+   * If true, only injects the dispatcher script tag into HTML pages that actually contain
+   * extracted event handlers.
+   * @default true
+   */
+  injectOnlyWhenUsed?: boolean;
+}
+
 export interface SriOptions {
   /**
    * Whether Subresource Integrity (SRI) hash injection is enabled.
@@ -158,6 +187,12 @@ export interface StrictCspOptions {
    * Set to `false` to disable.
    */
   extractScripts?: boolean | ExtractScriptsOptions;
+
+  /**
+   * Configuration for extracting inline event handlers (onclick, onsubmit, etc.).
+   * Set to `false` to disable.
+   */
+  extractEvents?: boolean | ExtractEventsOptions;
 
   /**
    * Configuration for Subresource Integrity (SRI) hashing.
