@@ -33,9 +33,7 @@ export function computeSriHash(
  * @sideeffects None (pure function).
  */
 export function computeCssClass(styleRule: string, prefix = 'is-'): string {
-  let trimmed = styleRule.trim();
-  while (trimmed.startsWith(';')) trimmed = trimmed.slice(1);
-  while (trimmed.endsWith(';')) trimmed = trimmed.slice(0, -1);
+  const trimmed = styleRule.trim().replace(/^;+|;+$/g, '');
   const hash = crypto.createHash('md5').update(trimmed).digest('hex').slice(0, 6);
   return `${prefix}${hash}`;
 }

@@ -26,6 +26,7 @@ import type {
   ExtractScriptsOptions,
   ExtractStylesOptions,
   SriOptions,
+  SsrCspOptions,
   StrictCspOptions,
 } from './types.js';
 
@@ -34,6 +35,7 @@ export * from './csp.js';
 export * from './events.js';
 export * from './extractor.js';
 export * from './html-utils.js';
+export * from './middleware.js';
 export * from './sri.js';
 export * from './types.js';
 export { strictCsp, strictCsp as astroStrictCsp };
@@ -55,79 +57,111 @@ function getHtmlFiles(dir: string): string[] {
 }
 
 /**
+ * Resolves a module configuration option supporting boolean flags or configuration objects.
+ *
+ * @param option - Boolean flag or typed option object.
+ * @param defaultEnabled - Whether the option defaults to enabled when omitted or true.
+ * @returns Typed option object if enabled, or `false` if disabled.
+ */
+function resolveOption<T extends object>(
+  option: boolean | T | undefined,
+  defaultEnabled = true,
+): T | false {
+  if (option === false) return false;
+  if (typeof option === 'object' && option !== null) {
+    if ('enabled' in option && (option as { enabled?: boolean }).enabled === false) {
+      return false;
+    }
+    return option;
+  }
+  return defaultEnabled ? ({} as T) : false;
+}
+
+/**
  * Astro Integration for enforcing a Strict Content Security Policy (zero `'unsafe-inline'`),
  * extracting and bundling inline CSS and JavaScript, and calculating Subresource Integrity (SRI) hashes.
  *
- * ### How It Works:
- * 1. **`astro:config:setup`**:
- *    Inspects user configuration and logs a recommendation warning if `build.inlineStylesheets`
- *    is set to `'always'`.
+ * ### Dual Operational Modes:
+ * 1. **SSR Mode (`output: "server"`)**:
+ *    Automatically registers runtime middleware (`astro-strict-csp/middleware`) via `addMiddleware()`.
+ *    Generates dynamic per-request cryptographic nonces (`Astro.locals.nonce`) and sets strict
+ *    HTTP `Content-Security-Policy` response headers on HTML routes.
  *
- * 2. **`astro:build:done`**:
- *    Runs a high-performance in-memory post-build transformation pipeline across all HTML files
- *    in the output directory (`dist/`):
- *    - **Stage 1 (Inline Styles)**: Extracts all `style="..."` attributes and `<style>` blocks into
- *      a deduplicated stylesheet (`dist/_astro/inline-styles.css`), replacing inline styles with `.is-[hash]`
- *      utility classes. Injects `<link rel="stylesheet">` into affected pages.
- *    - **Stage 2 (Inline Scripts)**: Extracts all executable `<script>` blocks (skipping structured data
- *      like JSON-LD) into external bundles (`dist/_astro/inline-[hash].js`).
- *    - **Stage 3 (Subresource Integrity)**: Calculates cryptographic digests (`sha384`) for all local
- *      scripts and stylesheets using a shared build cache, injecting `integrity="..."` and `crossorigin="anonymous"`.
- *    - **Stage 4 (Content Security Policy)**: Formats strict directives without `'unsafe-inline'` and injects
- *      a `<meta http-equiv="Content-Security-Policy">` tag in `<head>` and/or updates `dist/_headers`.
- *    - **Stage 5 (Single-Pass Write)**: Overwrites modified HTML files on disk in a single pass.
+ * 2. **SSG Mode (`output: "static"`)**:
+ *    Executes a high-performance in-memory transformation during `astro:build:done`:
+ *    - Extracts `style="..."` attributes and `<style>` blocks into deduplicated CSS (`inline-styles.css`).
+ *    - Extracts inline scripts into external files (`inline-[hash].js`).
+ *    - Injects Subresource Integrity (`integrity="sha384-..."`) into local assets.
+ *    - Generates CSP meta tags and updates `dist/_headers`.
  *
  * @param options - Configuration options for style extraction, script extraction, SRI, and CSP enforcement.
  * @returns An `AstroIntegration` object satisfying the Astro Integration API.
  *
  * @sideeffects
- * - **Disk Reads**: Reads all `.html` files in `dist/` once, plus referenced local asset files (`.js`, `.css`) for SRI hashing.
- * - **Disk Writes**:
+ * - **Disk Reads (SSG)**: Reads all `.html` files in `dist/` once, plus referenced local asset files (`.js`, `.css`) for SRI hashing.
+ * - **Disk Writes (SSG)**:
  *   - Emits `dist/_astro/inline-styles.css` if styles were extracted.
  *   - Emits `dist/_astro/inline-[hash].js` for each extracted script.
  *   - Overwrites modified `.html` files in `dist/`.
  *   - Creates or updates `dist/_headers` if `csp.generateHeadersFile` is enabled.
+ * - **Astro Middleware (SSR)**: Registers `astro-strict-csp/middleware` into the runtime middleware chain.
  * - **Astro Logger**: Emits informational logs and warnings via `logger.info()` and `logger.warn()`.
  */
 export default function strictCsp(options: StrictCspOptions = {}): AstroIntegration {
   const assetsDir = options.assetsDir || '_astro';
 
-  // Normalize options
-  const stylesOpt: ExtractStylesOptions | false =
-    options.extractStyles === false
-      ? false
-      : typeof options.extractStyles === 'object'
-        ? options.extractStyles
-        : {};
-
-  const scriptsOpt: ExtractScriptsOptions | false =
-    options.extractScripts === false
-      ? false
-      : typeof options.extractScripts === 'object'
-        ? options.extractScripts
-        : {};
-
-  const eventsOpt: ExtractEventsOptions | false =
-    options.extractEvents === false
-      ? false
-      : typeof options.extractEvents === 'object'
-        ? options.extractEvents
-        : {};
-
-  const sriOpt: SriOptions | false =
-    options.sri === false ? false : typeof options.sri === 'object' ? options.sri : {};
-
-  const cspOpt: CspOptions | false =
-    options.csp === true ? {} : typeof options.csp === 'object' ? options.csp : false;
+  // Normalize options cleanly
+  const stylesOpt = resolveOption<ExtractStylesOptions>(options.extractStyles, true);
+  const scriptsOpt = resolveOption<ExtractScriptsOptions>(options.extractScripts, true);
+  const eventsOpt = resolveOption<ExtractEventsOptions>(options.extractEvents, true);
+  const sriOpt = resolveOption<SriOptions>(options.sri, true);
+  const cspOpt = resolveOption<CspOptions>(options.csp, false);
+  const ssrOpt = resolveOption<SsrCspOptions>(options.ssr, true);
 
   return {
     name: 'astro-strict-csp',
     hooks: {
-      'astro:config:setup': ({ config, logger }) => {
+      'astro:config:setup': ({ config, updateConfig, addMiddleware, logger }) => {
         if (config.build?.inlineStylesheets === 'always') {
           logger.warn(
             '[astro-strict-csp] `build.inlineStylesheets` is set to "always". To maximize strict CSP compliance and browser caching, "never" is strongly recommended.',
           );
+        }
+
+        // If Astro is in SSR mode ("server") and SSR CSP is enabled, inject virtual config & middleware
+        if (config.output === 'server' && ssrOpt !== false) {
+          logger.info(
+            '[astro-strict-csp] Detected SSR output mode. Injecting CSP nonce middleware.',
+          );
+
+          // Virtual module delivering user options to the middleware bundle
+          const virtualId = 'virtual:astro-strict-csp/config';
+          const resolvedVirtualId = `\0${virtualId}`;
+
+          updateConfig({
+            vite: {
+              plugins: [
+                {
+                  name: 'astro-strict-csp-virtual-config',
+                  resolveId(id: string) {
+                    if (id === virtualId) {
+                      return resolvedVirtualId;
+                    }
+                  },
+                  load(id: string) {
+                    if (id === resolvedVirtualId) {
+                      return `export const ssrOptions = ${JSON.stringify(ssrOpt)};`;
+                    }
+                  },
+                },
+              ],
+            },
+          });
+
+          addMiddleware({
+            entrypoint: 'astro-strict-csp/middleware',
+            order: 'pre',
+          });
         }
       },
 

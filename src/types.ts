@@ -175,7 +175,57 @@ export interface CspOptions {
   directives?: CspDirectives;
 }
 
+export interface SsrCspOptions {
+  /**
+   * Whether SSR CSP middleware is enabled.
+   * @default true
+   */
+  enabled?: boolean;
+
+  /**
+   * Custom CSP directives for SSR responses.
+   * Defaults to strict policy with `'self'`, image data/https URLs, and font domains.
+   */
+  directives?: CspDirectives;
+
+  /**
+   * Automatically inject `'nonce-${nonce}'` into `script-src`.
+   * @default true
+   */
+  injectScriptNonce?: boolean;
+
+  /**
+   * Automatically inject `'nonce-${nonce}'` into `style-src`.
+   * @default false
+   */
+  injectStyleNonce?: boolean;
+
+  /**
+   * Append `'strict-dynamic'` to `script-src` for modern propagation to dynamically loaded bundles.
+   * @default false
+   */
+  strictDynamic?: boolean;
+
+  /**
+   * Use `Content-Security-Policy-Report-Only` header instead of enforcing `Content-Security-Policy`.
+   * @default false
+   */
+  reportOnly?: boolean;
+
+  /**
+   * Path prefixes or regexes to exclude from CSP headers (e.g. `['/admin', '/api']`).
+   * @default []
+   */
+  exclude?: (string | RegExp)[];
+}
+
 export interface StrictCspOptions {
+  /**
+   * Configuration for SSR mode. If omitted or `true`, automatically activates when Astro is in `output: "server"`.
+   * Set to `false` to disable SSR middleware.
+   */
+  ssr?: boolean | SsrCspOptions;
+
   /**
    * Configuration for extracting inline styles (style attributes and <style> tags).
    * Set to `false` to disable.

@@ -969,5 +969,158 @@ describe('astro-strict-csp Comprehensive Test Suite', () => {
       const instance = astroStrictCsp();
       expect(instance.name).toBe('astro-strict-csp');
     });
+
+    it('injects SSR middleware when output is "server"', () => {
+      const addMiddleware = vi.fn();
+      const updateConfig = vi.fn();
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const integration = strictCsp();
+
+      const setupHook = getHook(integration, 'astro:config:setup');
+      setupHook({
+        config: { output: 'server' },
+        addMiddleware,
+        updateConfig,
+        logger,
+      });
+
+      expect(updateConfig).toHaveBeenCalled();
+      expect(addMiddleware).toHaveBeenCalledWith({
+        entrypoint: 'astro-strict-csp/middleware',
+        order: 'pre',
+      });
+      expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('Detected SSR output mode'));
+    });
+
+    it('does not inject SSR middleware when output is "static"', () => {
+      const addMiddleware = vi.fn();
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const integration = strictCsp();
+
+      const setupHook = getHook(integration, 'astro:config:setup');
+      setupHook({
+        config: { output: 'static' },
+        addMiddleware,
+        logger,
+      });
+
+      expect(addMiddleware).not.toHaveBeenCalled();
+    });
+
+    it('does not inject SSR middleware when ssr: false', () => {
+      const addMiddleware = vi.fn();
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const integration = strictCsp({ ssr: false });
+
+      const setupHook = getHook(integration, 'astro:config:setup');
+      setupHook({
+        config: { output: 'server' },
+        addMiddleware,
+        logger,
+      });
+
+      expect(addMiddleware).not.toHaveBeenCalled();
+    });
+  });
+
+  // =========================================================================
+  // 9. SSR MIDDLEWARE
+  // =========================================================================
+  describe('SSR CSP Middleware (middleware.ts)', () => {
+    it('generates unique cryptographic nonces and sets CSP header on HTML responses', async () => {
+      const { createSsrCspMiddleware } = await import('../src/middleware.js');
+      const middleware = createSsrCspMiddleware();
+
+      const context = {
+        url: new URL('https://example.com/blog/my-post'),
+        locals: {},
+      };
+
+      const response = await middleware(context, async () => {
+        return new Response('<!DOCTYPE html><html><body><h1>Hello</h1></body></html>', {
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        });
+      });
+
+      expect(context.locals).toHaveProperty('nonce');
+      const nonce = (context.locals as { nonce: string }).nonce;
+      expect(nonce).toBeDefined();
+      expect(typeof nonce).toBe('string');
+      expect(nonce.length).toBeGreaterThan(10);
+
+      const csp = response.headers.get('content-security-policy');
+      expect(csp).toBeDefined();
+      expect(csp).toContain(`'nonce-${nonce}'`);
+      expect(csp).toContain("default-src 'none'");
+    });
+
+    it('skips non-HTML responses by default', async () => {
+      const { createSsrCspMiddleware } = await import('../src/middleware.js');
+      const middleware = createSsrCspMiddleware();
+
+      const context = {
+        url: new URL('https://example.com/api/data.json'),
+        locals: {},
+      };
+
+      const response = await middleware(context, async () => {
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { 'content-type': 'application/json' },
+        });
+      });
+
+      expect(response.headers.get('content-security-policy')).toBeNull();
+    });
+
+    it('respects path exclusions (e.g. /admin)', async () => {
+      const { createSsrCspMiddleware } = await import('../src/middleware.js');
+      const middleware = createSsrCspMiddleware({
+        exclude: ['/admin'],
+      });
+
+      const context = {
+        url: new URL('https://example.com/admin/settings'),
+        locals: {},
+      };
+
+      const response = await middleware(context, async () => {
+        return new Response('<!DOCTYPE html><html>Admin</html>', {
+          headers: { 'content-type': 'text/html' },
+        });
+      });
+
+      expect(response.headers.get('content-security-policy')).toBeNull();
+      expect(context.locals).not.toHaveProperty('nonce');
+    });
+
+    it('supports reportOnly mode and custom directives', async () => {
+      const { createSsrCspMiddleware } = await import('../src/middleware.js');
+      const middleware = createSsrCspMiddleware({
+        reportOnly: true,
+        directives: {
+          'default-src': ["'none'"],
+          'script-src': ['https://cdn.example.com'],
+        },
+        injectStyleNonce: true,
+        strictDynamic: true,
+      });
+
+      const context = {
+        url: new URL('https://example.com/'),
+        locals: {},
+      };
+
+      const response = await middleware(context, async () => {
+        return new Response('<!DOCTYPE html><html>Home</html>', {
+          headers: { 'content-type': 'text/html' },
+        });
+      });
+
+      expect(response.headers.get('content-security-policy')).toBeNull();
+      const reportHeader = response.headers.get('content-security-policy-report-only');
+      expect(reportHeader).toBeDefined();
+      expect(reportHeader).toContain("'strict-dynamic'");
+      expect(reportHeader).toContain(`'nonce-${(context.locals as { nonce?: string }).nonce}'`);
+    });
   });
 });
