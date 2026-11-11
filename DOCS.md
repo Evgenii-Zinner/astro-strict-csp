@@ -25,7 +25,7 @@
 
 ## 1. Architecture Overview & Pipeline
 
-Modern browser security audits (Mozilla Observatory, Google CSP Evaluator, SOC 2, HIPAA, PCI-DSS) penalize or fail policies containing `'unsafe-inline'`. However, static site generation in Astro frequently emits inline styles (Shiki syntax tokens, component wrappers, SVGs), inline scripts (hydration islands, telemetry), and inline event handlers (`onclick`, `onsubmit`).
+Preventing Cross-Site Scripting (XSS), session hijacking, and malicious script execution requires enforcing a strict Content Security Policy without `'unsafe-inline'`. However, static site generation in Astro frequently emits inline styles (Shiki syntax tokens, component wrappers, SVGs), inline scripts (hydration islands, telemetry), and inline event handlers (`onclick`, `onsubmit`).
 
 `astro-strict-csp` runs purely as a post-build transform during the `astro:build:done` lifecycle hook. It loads pages into memory, transforms all markup in a single pass, emits external bundled assets, computes SRI hashes, and injects strict CSP policies.
 
