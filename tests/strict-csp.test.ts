@@ -32,6 +32,54 @@ describe('astro-strict-csp Comprehensive Test Suite', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
+  interface SetupHookParams {
+    config: {
+      output?: 'server' | 'static';
+      build?: { inlineStylesheets?: 'always' | 'never' | 'auto' };
+    };
+    addMiddleware?: (options: { entrypoint: string; order?: 'pre' | 'post' }) => void;
+    updateConfig?: (options: {
+      vite?: {
+        plugins?: Array<{
+          name: string;
+          resolveId: (id: string) => string | undefined;
+          load: (id: string) => string | undefined;
+        }>;
+      };
+    }) => void;
+    logger?: {
+      info?: (msg: string) => void;
+      warn?: (msg: string) => void;
+      error?: (msg: string) => void;
+    };
+  }
+
+  interface BuildDoneHookParams {
+    dir: URL;
+    logger?: {
+      info?: (msg: string) => void;
+      warn?: (msg: string) => void;
+      error?: (msg: string) => void;
+    };
+  }
+
+  function getHook(
+    integration: ReturnType<typeof strictCsp>,
+    hookName: 'astro:config:setup',
+  ): (params: SetupHookParams) => void;
+  function getHook(
+    integration: ReturnType<typeof strictCsp>,
+    hookName: 'astro:build:done',
+  ): (params: BuildDoneHookParams) => Promise<void>;
+  function getHook(
+    integration: ReturnType<typeof strictCsp>,
+    hookName: 'astro:config:setup' | 'astro:build:done',
+  ) {
+    const hook = integration.hooks[hookName];
+    if (!hook) throw new Error(`Hook ${hookName} not found`);
+    return hook;
+  }
+
   // =========================================================================
   // 1. CRYPTO UTILITIES
   // =========================================================================
@@ -671,23 +719,6 @@ describe('astro-strict-csp Comprehensive Test Suite', () => {
   // 7. ASTRO INTEGRATION LIFECYCLE & HOOKS
   // =========================================================================
   describe('Astro Integration Lifecycle Hooks', () => {
-    function getHook(
-      integration: ReturnType<typeof strictCsp>,
-      hookName: 'astro:config:setup' | 'astro:build:done',
-    ) {
-      const hook = integration.hooks[hookName];
-      if (!hook) throw new Error(`Hook ${hookName} not found`);
-      return hook as (args: {
-        config?: { build?: { inlineStylesheets?: 'always' | 'never' | 'auto' } };
-        dir?: URL;
-        logger?: {
-          info?: (msg: string) => void;
-          warn?: (msg: string) => void;
-          error?: (msg: string) => void;
-        };
-      }) => Promise<void> | void;
-    }
-
     it('warns in astro:config:setup if build.inlineStylesheets is "always"', () => {
       const integration = strictCsp();
       const loggerWarn = vi.fn();
@@ -968,6 +999,323 @@ describe('astro-strict-csp Comprehensive Test Suite', () => {
       expect(astroStrictCsp).toBe(strictCsp);
       const instance = astroStrictCsp();
       expect(instance.name).toBe('astro-strict-csp');
+    });
+
+    it('injects SSR middleware when output is "server"', () => {
+      const addMiddleware = vi.fn();
+      const updateConfig = vi.fn();
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const integration = strictCsp();
+
+      const setupHook = getHook(integration, 'astro:config:setup');
+      setupHook({
+        config: { output: 'server' },
+        addMiddleware,
+        updateConfig,
+        logger,
+      });
+
+      expect(updateConfig).toHaveBeenCalled();
+      expect(addMiddleware).toHaveBeenCalledWith({
+        entrypoint: 'astro-strict-csp/middleware',
+        order: 'pre',
+      });
+      expect(logger.info).toHaveBeenCalledWith(expect.stringContaining('Detected SSR output mode'));
+    });
+
+    it('does not inject SSR middleware when output is "static"', () => {
+      const addMiddleware = vi.fn();
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const integration = strictCsp();
+
+      const setupHook = getHook(integration, 'astro:config:setup');
+      setupHook({
+        config: { output: 'static' },
+        addMiddleware,
+        logger,
+      });
+
+      expect(addMiddleware).not.toHaveBeenCalled();
+    });
+
+    it('does not inject SSR middleware when ssr: false', () => {
+      const addMiddleware = vi.fn();
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const integration = strictCsp({ ssr: false });
+
+      const setupHook = getHook(integration, 'astro:config:setup');
+      setupHook({
+        config: { output: 'server' },
+        addMiddleware,
+        logger,
+      });
+
+      expect(addMiddleware).not.toHaveBeenCalled();
+    });
+  });
+
+  // =========================================================================
+  // 9. SSR MIDDLEWARE
+  // =========================================================================
+  describe('SSR CSP Middleware (middleware.ts)', () => {
+    it('generates unique cryptographic nonces and sets CSP header on HTML responses', async () => {
+      const { createSsrCspMiddleware } = await import('../src/middleware.js');
+      const middleware = createSsrCspMiddleware();
+
+      const context = {
+        url: new URL('https://example.com/blog/my-post'),
+        locals: {},
+      };
+
+      const response = await middleware(context, async () => {
+        return new Response('<!DOCTYPE html><html><body><h1>Hello</h1></body></html>', {
+          headers: { 'content-type': 'text/html; charset=utf-8' },
+        });
+      });
+
+      expect(context.locals).toHaveProperty('nonce');
+      const nonce = (context.locals as { nonce: string }).nonce;
+      expect(nonce).toBeDefined();
+      expect(typeof nonce).toBe('string');
+      expect(nonce.length).toBeGreaterThan(10);
+
+      const csp = response.headers.get('content-security-policy');
+      expect(csp).toBeDefined();
+      expect(csp).toContain(`'nonce-${nonce}'`);
+      expect(csp).toContain("default-src 'none'");
+    });
+
+    it('skips non-HTML responses by default', async () => {
+      const { createSsrCspMiddleware } = await import('../src/middleware.js');
+      const middleware = createSsrCspMiddleware();
+
+      const context = {
+        url: new URL('https://example.com/api/data.json'),
+        locals: {},
+      };
+
+      const response = await middleware(context, async () => {
+        return new Response(JSON.stringify({ ok: true }), {
+          headers: { 'content-type': 'application/json' },
+        });
+      });
+
+      expect(response.headers.get('content-security-policy')).toBeNull();
+    });
+
+    it('respects path exclusions (e.g. /admin)', async () => {
+      const { createSsrCspMiddleware } = await import('../src/middleware.js');
+      const middleware = createSsrCspMiddleware({
+        exclude: ['/admin'],
+      });
+
+      const context = {
+        url: new URL('https://example.com/admin/settings'),
+        locals: {},
+      };
+
+      const response = await middleware(context, async () => {
+        return new Response('<!DOCTYPE html><html>Admin</html>', {
+          headers: { 'content-type': 'text/html' },
+        });
+      });
+
+      expect(response.headers.get('content-security-policy')).toBeNull();
+      expect(context.locals).not.toHaveProperty('nonce');
+    });
+
+    it('supports reportOnly mode and custom directives', async () => {
+      const { createSsrCspMiddleware } = await import('../src/middleware.js');
+      const middleware = createSsrCspMiddleware({
+        reportOnly: true,
+        directives: {
+          'default-src': ["'none'"],
+          'script-src': ['https://cdn.example.com'],
+        },
+        injectStyleNonce: true,
+        strictDynamic: true,
+      });
+
+      const context = {
+        url: new URL('https://example.com/'),
+        locals: {},
+      };
+
+      const response = await middleware(context, async () => {
+        return new Response('<!DOCTYPE html><html>Home</html>', {
+          headers: { 'content-type': 'text/html' },
+        });
+      });
+
+      expect(response.headers.get('content-security-policy')).toBeNull();
+      const reportHeader = response.headers.get('content-security-policy-report-only');
+      expect(reportHeader).toBeDefined();
+      expect(reportHeader).toContain("'strict-dynamic'");
+      expect(reportHeader).toContain(`'nonce-${(context.locals as { nonce?: string }).nonce}'`);
+    });
+
+    it('tests virtual module resolution and onRequest export directly', async () => {
+      const { onRequest } = await import('../src/middleware.js');
+      const context = {
+        url: new URL('https://example.com/page'),
+        locals: {},
+      };
+
+      const response = await onRequest(context, async () => {
+        return new Response('<!DOCTYPE html><html><body>Test</body></html>', {
+          headers: { 'content-type': 'text/html' },
+        });
+      });
+
+      expect(response.headers.get('content-security-policy')).toBeDefined();
+      expect(context.locals).toHaveProperty('nonce');
+    });
+
+    it('handles RegExp exclusions and string directives in formatSsrCspDirectives', async () => {
+      const { createSsrCspMiddleware, formatSsrCspDirectives } = await import(
+        '../src/middleware.js'
+      );
+      const middleware = createSsrCspMiddleware({
+        exclude: [/^\/api\/.*/],
+      });
+
+      const context = {
+        url: new URL('https://example.com/api/v1/users'),
+        locals: {},
+      };
+
+      const response = await middleware(context, async () => {
+        return new Response('<!DOCTYPE html><html>Api</html>', {
+          headers: { 'content-type': 'text/html' },
+        });
+      });
+
+      expect(response.headers.get('content-security-policy')).toBeNull();
+
+      // Test formatSsrCspDirectives branches: boolean true, string values, injectScriptNonce: false
+      const formatted = formatSsrCspDirectives(
+        {
+          'default-src': "'self'",
+          'script-src': "'self' https://trusted.org",
+          'upgrade-insecure-requests': true,
+          'block-all-mixed-content': false,
+        },
+        'testnonce123',
+        { injectScriptNonce: false },
+      );
+
+      expect(formatted).toContain("default-src 'self'");
+      expect(formatted).toContain('upgrade-insecure-requests');
+      expect(formatted).not.toContain('testnonce123');
+      expect(formatted).not.toContain('block-all-mixed-content');
+
+      // Test injectStyleNonce: true
+      const withStyleNonce = formatSsrCspDirectives(
+        {
+          'style-src': "'self'",
+        },
+        'testnonce123',
+        { injectStyleNonce: true },
+      );
+      expect(withStyleNonce).toBe("style-src 'self' 'nonce-testnonce123'");
+
+      // Test when nonces and strict-dynamic are already present
+      const alreadyHasNonce = formatSsrCspDirectives(
+        {
+          'script-src': "'self' 'nonce-testnonce123' 'strict-dynamic'",
+          'style-src': "'self' 'nonce-testnonce123'",
+        },
+        'testnonce123',
+        { injectScriptNonce: true, injectStyleNonce: true, strictDynamic: true },
+      );
+      expect(alreadyHasNonce).toBe(
+        "script-src 'self' 'nonce-testnonce123' 'strict-dynamic'; style-src 'self' 'nonce-testnonce123'",
+      );
+    });
+
+    it('exercises virtual plugin resolveId and load hooks in index.ts', () => {
+      interface VitePlugin {
+        name: string;
+        resolveId: (id: string) => string | undefined;
+        load: (id: string) => string | undefined;
+      }
+      let capturedPlugins: VitePlugin[] = [];
+      const updateConfig = (cfg: { vite?: { plugins?: VitePlugin[] } }) => {
+        capturedPlugins = cfg?.vite?.plugins || [];
+      };
+      const addMiddleware = vi.fn();
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+      const integration = strictCsp({ ssr: { exclude: ['/admin'] } });
+      const setupHook = getHook(integration, 'astro:config:setup');
+
+      setupHook({
+        config: { output: 'server' },
+        addMiddleware,
+        updateConfig,
+        logger,
+      });
+
+      expect(capturedPlugins).toHaveLength(1);
+      const plugin = capturedPlugins[0];
+      expect(plugin.name).toBe('astro-strict-csp-virtual-config');
+
+      // Test resolveId
+      const resolved = plugin.resolveId('virtual:astro-strict-csp/config');
+      expect(resolved).toBe('\0virtual:astro-strict-csp/config');
+      expect(plugin.resolveId('other-module')).toBeUndefined();
+
+      // Test load
+      const loaded = plugin.load('\0virtual:astro-strict-csp/config');
+      expect(loaded).toContain('export const ssrOptions =');
+      expect(loaded).toContain('/admin');
+      expect(plugin.load('other-module')).toBeUndefined();
+    });
+
+    it('handles options with enabled: false in resolveOption', () => {
+      const integration = strictCsp({
+        ssr: { enabled: false },
+        extractStyles: { enabled: false },
+        extractScripts: { enabled: false },
+        extractEvents: { enabled: false },
+        sri: { enabled: false },
+      });
+      const addMiddleware = vi.fn();
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const setupHook = getHook(integration, 'astro:config:setup');
+
+      setupHook({
+        config: { output: 'server' },
+        addMiddleware,
+        logger,
+      });
+
+      expect(addMiddleware).not.toHaveBeenCalled();
+    });
+
+    it('creates assets directory if it does not exist when writing extracted scripts', async () => {
+      const htmlDir = path.join(tempDir, 'no-assets');
+      fs.mkdirSync(htmlDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(htmlDir, 'index.html'),
+        '<!DOCTYPE html><html><body><script>const x = 42;</script></body></html>',
+        'utf-8',
+      );
+
+      const integration = strictCsp({
+        extractStyles: false,
+        extractEvents: false,
+        sri: false,
+        csp: false,
+      });
+      const doneHook = getHook(integration, 'astro:build:done');
+      await doneHook({
+        dir: new URL(`file://${htmlDir}/`),
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      });
+
+      const extractedFiles = fs.readdirSync(path.join(htmlDir, '_astro'));
+      expect(extractedFiles.length).toBeGreaterThan(0);
     });
   });
 });

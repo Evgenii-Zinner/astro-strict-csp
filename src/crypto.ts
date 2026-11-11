@@ -33,10 +33,13 @@ export function computeSriHash(
  * @sideeffects None (pure function).
  */
 export function computeCssClass(styleRule: string, prefix = 'is-'): string {
-  let trimmed = styleRule.trim();
-  while (trimmed.startsWith(';')) trimmed = trimmed.slice(1);
-  while (trimmed.endsWith(';')) trimmed = trimmed.slice(0, -1);
-  const hash = crypto.createHash('md5').update(trimmed).digest('hex').slice(0, 6);
+  const trimmed = styleRule.trim();
+  let start = 0;
+  let end = trimmed.length;
+  while (start < end && trimmed.charCodeAt(start) === 59) start++; // 59 is ';'
+  while (end > start && trimmed.charCodeAt(end - 1) === 59) end--;
+  const clean = start > 0 || end < trimmed.length ? trimmed.slice(start, end) : trimmed;
+  const hash = crypto.createHash('md5').update(clean).digest('hex').slice(0, 6);
   return `${prefix}${hash}`;
 }
 

@@ -9,4 +9,19 @@ export default defineConfig({
       exclude: ['src/types.ts'],
     },
   },
+  plugins: [
+    {
+      name: 'virtual-astro-strict-csp-config',
+      resolveId(id) {
+        if (id === 'virtual:astro-strict-csp/config') {
+          return '\0virtual:astro-strict-csp/config';
+        }
+      },
+      load(id) {
+        if (id === '\0virtual:astro-strict-csp/config') {
+          return 'export const ssrOptions = { reportOnly: false };';
+        }
+      },
+    },
+  ],
 });
