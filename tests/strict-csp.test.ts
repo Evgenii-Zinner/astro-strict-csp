@@ -1208,6 +1208,29 @@ describe('astro-strict-csp Comprehensive Test Suite', () => {
       expect(formatted).toContain('upgrade-insecure-requests');
       expect(formatted).not.toContain('testnonce123');
       expect(formatted).not.toContain('block-all-mixed-content');
+
+      // Test injectStyleNonce: true
+      const withStyleNonce = formatSsrCspDirectives(
+        {
+          'style-src': "'self'",
+        },
+        'testnonce123',
+        { injectStyleNonce: true },
+      );
+      expect(withStyleNonce).toBe("style-src 'self' 'nonce-testnonce123'");
+
+      // Test when nonces and strict-dynamic are already present
+      const alreadyHasNonce = formatSsrCspDirectives(
+        {
+          'script-src': "'self' 'nonce-testnonce123' 'strict-dynamic'",
+          'style-src': "'self' 'nonce-testnonce123'",
+        },
+        'testnonce123',
+        { injectScriptNonce: true, injectStyleNonce: true, strictDynamic: true },
+      );
+      expect(alreadyHasNonce).toBe(
+        "script-src 'self' 'nonce-testnonce123' 'strict-dynamic'; style-src 'self' 'nonce-testnonce123'",
+      );
     });
 
     it('exercises virtual plugin resolveId and load hooks in index.ts', () => {
@@ -1247,6 +1270,52 @@ describe('astro-strict-csp Comprehensive Test Suite', () => {
       expect(loaded).toContain('export const ssrOptions =');
       expect(loaded).toContain('/admin');
       expect(plugin.load('other-module')).toBeUndefined();
+    });
+
+    it('handles options with enabled: false in resolveOption', () => {
+      const integration = strictCsp({
+        ssr: { enabled: false },
+        extractStyles: { enabled: false },
+        extractScripts: { enabled: false },
+        extractEvents: { enabled: false },
+        sri: { enabled: false },
+      });
+      const addMiddleware = vi.fn();
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+      const setupHook = getHook(integration, 'astro:config:setup');
+
+      setupHook({
+        config: { output: 'server' },
+        addMiddleware,
+        logger,
+      });
+
+      expect(addMiddleware).not.toHaveBeenCalled();
+    });
+
+    it('creates assets directory if it does not exist when writing extracted scripts', async () => {
+      const htmlDir = path.join(tempDir, 'no-assets');
+      fs.mkdirSync(htmlDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(htmlDir, 'index.html'),
+        '<!DOCTYPE html><html><body><script>const x = 42;</script></body></html>',
+        'utf-8',
+      );
+
+      const integration = strictCsp({
+        extractStyles: false,
+        extractEvents: false,
+        sri: false,
+        csp: false,
+      });
+      const doneHook = getHook(integration, 'astro:build:done');
+      await doneHook({
+        dir: new URL(`file://${htmlDir}/`),
+        logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() },
+      });
+
+      const extractedFiles = fs.readdirSync(path.join(htmlDir, '_astro'));
+      expect(extractedFiles.length).toBeGreaterThan(0);
     });
   });
 });
