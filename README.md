@@ -7,69 +7,29 @@
 [![code style: biome](https://img.shields.io/badge/code_style-biome-60a5fa.svg?style=flat)](https://biomejs.dev)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 
-> **Zero-Dependency Astro Integration for Strict Content Security Policy (Zero `unsafe-inline`), Inline Style & Script Bundling, and Subresource Integrity (SRI).**
->
-> 📖 **[Read Full Architecture & Developer Reference (DOCS.md)](./DOCS.md)** — Detailed module breakdown, edge-case protections, and exact filesystem/HTML side effects.
+> **Zero-dependency Astro integration to achieve strict Content Security Policy (zero `'unsafe-inline'`) for both Static (SSG) and Server-Rendered (SSR) sites.**
 
 ---
 
-## 1. Executive Summary & Value Proposition
+## The Problem
 
-Achieving a true **A+ security score** (e.g. on Mozilla Observatory, Google CSP Evaluator, SOC 2, HIPAA, or PCI-DSS audits) requires enforcing a strict Content Security Policy without `'unsafe-inline'`:
+Passing strict security audits (Mozilla Observatory A+, Google CSP Evaluator, SOC 2, HIPAA, PCI-DSS) requires blocking `'unsafe-inline'` scripts and styles:
+
 ```http
 Content-Security-Policy: default-src 'none'; script-src 'self'; style-src 'self';
 ```
 
-In standard Astro builds, strict policies break because:
-1. **Inline Styles (`style="..."` & `<style>`):** Shiki code blocks, UI framework components (React, Vue, Svelte, Preact), `<Image />` layout wrappers, third-party widgets, and SVGs inject inline styles. Without extraction, these require `'unsafe-inline'`.
-2. **Inline Scripts (`<script>`):** Client hydration scripts, analytics snippets, and theme toggles force `'unsafe-inline'` on `script-src` unless extracted or manually hashed.
-3. **Missing Subresource Integrity (SRI):** Astro has no built-in SRI hashing. If assets hosted on a CDN or cloud storage are tampered with, browsers cannot verify their cryptographic integrity.
+In standard Astro projects, this strict policy breaks immediately because:
+1. **Inline Styles:** Shiki syntax highlighting, UI components (React/Vue/Svelte), and layout wrappers inject inline `style="..."` attributes and `<style>` blocks.
+2. **Inline Scripts:** Hydration snippets, analytics, and theme toggles inject inline `<script>` tags without nonces or hashes.
+3. **No SRI Hashes:** Local scripts and stylesheets lack Subresource Integrity (`integrity="sha384-..."`), leaving CDN deployments vulnerable to tampering.
+4. **SSR Nonce Handling:** Dynamic SSR apps need per-request cryptographic nonces attached to HTTP response headers and exposed to component templates.
 
-`astro-strict-csp` solves all of these issues in a single, **modular, zero-runtime-dependency** integration.
-
----
-
-## 2. Core Modules & Features
-
-### 🎨 Modular Inline Style Extractor
-- Scans `dist/**/*.html` during `astro:build:done`.
-- Extracts `style="..."` attributes across all elements: standard HTML, custom web components (e.g., `<astro-island>`, `<my-widget>`), and SVG elements (`<svg>`, `<path>`).
-- Replaces inline styles with deterministic CSS utility classes (default: `.is-[hash]` using MD5 6-char hash).
-- Extracts `<style>...</style>` inline stylesheets.
-- Deduplicates style rules across your entire site and writes them to `dist/_astro/inline-styles.css` (configurable name).
-- Injects `<link rel="stylesheet" href="/_astro/inline-styles.css">` into `<head>` only on pages that contain extracted styles.
-
-### 📜 Modular Inline Script Extractor
-- Scans for inline `<script>` tags without a `src` attribute.
-- Skips non-executable structured data blocks (e.g. `type="application/ld+json"`, `type="application/json"`).
-- Hashes script contents and emits external bundles: `dist/_astro/inline-[hash].js`.
-- Replaces inline tags with `<script src="/_astro/inline-[hash].js" type="module"></script>` (preserving attributes like `async`, `defer`, `id`, `nonce`).
-
-### ⚡ Modular Inline Event Handler Extractor & Runtime Dispatcher
-- Scans for inline HTML event handler attributes (`onclick="..."`, `onsubmit="..."`, `onkeydown="..."`, etc.).
-- Replaces inline handlers with deterministic delegated attributes (`data-csp-on-[event]="evt-[hash]"`).
-- Globally deduplicates identical handler code across all pages.
-- Generates a compact, zero-dependency capturing runtime dispatcher bundle: `dist/_astro/events-[hash].js`.
-- Injects `<script type="module" src="/_astro/events-[hash].js"></script>` into affected pages (or all pages if configured).
-- Automatically picked up and hashed with cryptographic SRI (`integrity="sha384-..."`) by the subsequent SRI stage.
-- Preserves native browser event semantics: `this` bound to the element, `event` passed as argument, `return false` prevents default action, and capture-phase (`{ capture: true }`) interception for non-bubbling events (`focus`, `blur`, `mouseenter`, `mouseleave`).
-
-### 🛡️ Subresource Integrity (SRI) Hasher
-- Computes cryptographic hashes (`sha384`, `sha256`, or `sha512`) for all local `<script src="...">` tags and `<link rel="stylesheet">` tags.
-- Injects `integrity="sha384-..."` and `crossorigin="anonymous"` into output HTML tags.
-
-### 🔒 Strict CSP Enforcer
-- Generates strict CSP directives without `'unsafe-inline'` or `'unsafe-eval'`.
-- Injects `<meta http-equiv="Content-Security-Policy">` into `<head>` (stripping directives unsupported in meta tags like `frame-ancestors`).
-- Optionally creates or updates `dist/_headers` for Cloudflare Pages, Netlify, and other static edge hosts.
-
-### ⚡ Zero Dependencies & Zero Overhead
-- **0 runtime dependencies:** Pure Node.js / Bun native APIs (`node:crypto`, `node:fs`, `node:path`, `node:url`).
-- **Post-build execution:** 0 runtime penalty, emitting 100% standard static HTML, CSS, and JS.
+`astro-strict-csp` solves all of these out of the box with zero runtime dependencies.
 
 ---
 
-## 3. Installation & Usage
+## Installation
 
 ```bash
 # npm
@@ -82,93 +42,130 @@ pnpm add -D astro-strict-csp
 bun add -d astro-strict-csp
 ```
 
-### Basic Configuration (`astro.config.mjs`)
+Add it to `astro.config.mjs`:
 
 ```typescript
 import { defineConfig } from "astro/config";
 import strictCsp from "astro-strict-csp";
 
 export default defineConfig({
-  site: "https://example.com",
+  integrations: [strictCsp()],
+});
+```
+
+---
+
+## How It Solves Your Setup
+
+The integration automatically adapts to your Astro `output` mode:
+
+### 1. Static Mode (`output: "static"`)
+Runs as a post-build transform on `dist/`:
+- **Extracts inline styles & `<style>` tags** into a single deduplicated stylesheet (`dist/_astro/inline-styles.css`) and replaces inline declarations with utility classes (`.is-[hash]`).
+- **Extracts inline `<script>` tags** into external bundles (`dist/_astro/inline-[hash].js`).
+- **Extracts inline event handlers** (`onclick`, `onsubmit`, etc.) into an external runtime dispatcher (`dist/_astro/events-[hash].js`).
+- **Computes Subresource Integrity (SRI)** (`sha384`) for all local JS and CSS files and injects `integrity` and `crossorigin` attributes.
+- **Sets strict CSP headers** in `dist/_headers` (for Cloudflare Pages, Netlify, etc.) and/or `<meta>` tags.
+
+### 2. SSR Mode (`output: "server"`)
+Automatically activates runtime middleware on Cloudflare Workers, Node, Deno, or Bun:
+- **Generates cryptographic per-request nonces** and exposes them via `Astro.locals.nonce`.
+- **Attaches strict `Content-Security-Policy` HTTP response headers** with `'nonce-{random}'` to all HTML pages.
+- **Supports route exclusions** so admin panels or CMS dashboards (e.g. `/_emdash`, `/admin`, `/api`) can run unblocked.
+
+---
+
+## SSR Usage: Adding Nonces to Scripts
+
+In SSR mode, inject the generated nonce into any inline `<script>` tag:
+
+```astro
+---
+// src/layouts/Layout.astro
+const nonce = Astro.locals.nonce;
+---
+
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>My Secure Site</title>
+  </head>
+  <body>
+    <slot />
+
+    <!-- Protected by dynamic per-request nonce -->
+    <script nonce={nonce}>
+      console.log("Strict CSP compliant script execution");
+    </script>
+  </body>
+</html>
+```
+
+> [!TIP]
+> **Inline Event Handlers:** Content Security Policy nonces only apply to `<script>` tags, not inline event handlers like `<button onclick="...">`. To keep your policy strict without `'unsafe-inline'`, attach event listeners inside a nonced script:
+> ```html
+> <button id="print-btn">Print</button>
+> <script nonce={nonce}>
+>   document.getElementById('print-btn')?.addEventListener('click', () => window.print());
+> </script>
+> ```
+
+---
+
+## Configuration Reference
+
+All features are enabled by default with secure defaults. You can customize any module:
+
+```typescript
+import { defineConfig } from "astro/config";
+import strictCsp from "astro-strict-csp";
+
+export default defineConfig({
   build: {
     // Recommended so Astro emits external CSS instead of inlining small stylesheets
     inlineStylesheets: "never",
   },
   integrations: [
-    strictCsp(),
-  ],
-});
-```
-
-### Full Configuration Options
-
-```typescript
-import { defineConfig } from "astro/config";
-import strictCsp from "astro-strict-csp";
-
-export default defineConfig({
-  site: "https://example.com",
-  build: {
-    inlineStylesheets: "never",
-  },
-  integrations: [
     strictCsp({
-      // 1. Style extraction (Shiki, UI components, SVG, custom elements)
+      // SSR Settings (only active when output: "server")
+      ssr: {
+        exclude: ["/_emdash", "/admin", /^\/api\/.*/], // Skip CSP on specific routes
+        reportOnly: false,                              // Use Content-Security-Policy-Report-Only
+        strictDynamic: false,                           // Append 'strict-dynamic' to script-src
+        injectScriptNonce: true,                        // Auto-add 'nonce-...' to script-src
+        injectStyleNonce: false,                        // Auto-add 'nonce-...' to style-src
+      },
+
+      // Static Build: Style Extraction
       extractStyles: {
         enabled: true,
-        outputFileName: "inline-styles.css", // Emitted into dist/_astro/inline-styles.css
-        classPrefix: "is-",                  // Utility class prefix (.is-4a2f1b)
-        extractAttributes: true,             // Extract style="..." attributes
-        extractStyleTags: true,               // Extract <style>...</style> blocks
-        injectOnlyWhenUsed: true,            // Only inject <link> on pages using extracted styles
+        outputFileName: "inline-styles.css",
+        classPrefix: "is-",
       },
 
-      // 2. Script extraction (Hydration snippets, analytics, theme toggles)
+      // Static Build: Script Extraction
       extractScripts: {
         enabled: true,
-        filePrefix: "inline-",               // Emitted into dist/_astro/inline-[hash].js
-        ignoreTypes: [
-          "application/ld+json",
-          "application/json",
-          "text/template",
-        ],
-        asModule: true,                      // Add type="module" to extracted scripts
+        asModule: true,
       },
 
-      // 3. Event handler extraction (onclick, onsubmit, onkeydown, etc.)
+      // Static Build: Event Extraction
       extractEvents: {
-        enabled: true,                       // true by default
-        filePrefix: "events-",               // Emitted into dist/_astro/events-[hash].js
-        dataAttributePrefix: "data-csp-on-", // Delegated data attribute prefix (data-csp-on-click="evt-1a2b3c")
-        injectOnlyWhenUsed: true,            // Only inject dispatcher script on pages with event handlers
+        enabled: true,
       },
 
-      // 4. Subresource Integrity (SRI)
+      // Static Build: Subresource Integrity (SRI)
       sri: {
         enabled: true,
-        algorithm: "sha384",                 // "sha256" | "sha384" | "sha512"
-        includeScripts: true,
-        includeStylesheets: true,
-        crossorigin: "anonymous",            // "anonymous" | "use-credentials" | false
+        algorithm: "sha384", // "sha256" | "sha384" | "sha512"
       },
 
-      // 5. Content Security Policy (Optional)
+      // Static Build: CSP Headers & Meta Tag
       csp: {
-        enabled: true,                       // false by default
-        generateMetaTag: true,               // Injects <meta> CSP in <head>
-        generateHeadersFile: true,           // Updates/creates dist/_headers
-        directives: {
-          "default-src": ["'none'"],
-          "script-src": ["'self'"],
-          "style-src": ["'self'"],
-          "img-src": ["'self'", "data:"],
-          "font-src": ["'self'"],
-          "connect-src": ["'self'"],
-          "frame-ancestors": ["'none'"],
-          "base-uri": ["'self'"],
-          "form-action": ["'none'"],
-          "upgrade-insecure-requests": true,
-        },
+        enabled: false,             // Set true to generate dist/_headers or <meta> tags in SSG
+        generateHeadersFile: true,  // Writes dist/_headers for Cloudflare/Netlify
+        generateMetaTag: true,
       },
     }),
   ],
@@ -177,99 +174,12 @@ export default defineConfig({
 
 ---
 
-## 4. Architecture & Build Lifecycle
+## Architecture Reference
 
-```
-Astro Build Pipeline
-       │
-       ▼
- [astro:build:done]
-       │
-       ├─► 1. Scan all dist/**/*.html files
-       │
-       ├─► 2. Inline Style Extractor
-       │      ├─ Find all style="..." attributes (HTML, SVG, custom web components)
-       │      ├─ Hash style strings (MD5 6-char, e.g. is-a1b2c3)
-       │      ├─ Replace with class="is-[hash]"
-       │      ├─ Extract inline <style> blocks
-       │      ├─ Write deduplicated dist/_astro/inline-styles.css
-       │      └─ Inject <link rel="stylesheet"> on pages with extracted styles
-       │
-       ├─► 3. Inline Script Extractor
-       │      ├─ Find <script> tags without src (skipping JSON-LD)
-       │      ├─ Hash content & write dist/_astro/inline-[hash].js
-       │      └─ Replace with <script src="/_astro/inline-[hash].js" type="module">
-       │
-       ├─► 4. Inline Event Handler Extractor
-       │      ├─ Find on*="..." attributes (onclick, onsubmit, onkeydown, etc.)
-       │      ├─ Replace with data-csp-on-[event]="evt-[hash]"
-       │      ├─ Deduplicate code globally & write dist/_astro/events-[hash].js
-       │      └─ Inject <script type="module" src="/_astro/events-[hash].js"> on affected pages
-       │
-       ├─► 5. SRI Injector
-       │      ├─ Find local <script src="..."> (including inline & event bundles) and <link rel="stylesheet">
-       │      ├─ Calculate sha384(assetBuffer)
-       │      └─ Inject integrity="sha384-..." and crossorigin="anonymous"
-       │
-       ├─► 6. CSP Enforcer
-       │      ├─ Format strict CSP without 'unsafe-inline'
-       │      ├─ Inject <meta http-equiv="Content-Security-Policy">
-       │      └─ Write dist/_headers (Cloudflare/Netlify)
-       │
-       ▼
- Emitted Production Artifacts (Ready for strict A+ CSP without 'unsafe-inline')
-```
+For detailed internal pipeline specifications, edge-case defenses (handling `CDATA`, `textarea`, unclosed comments), and AST-free HTML parsing algorithms, see **[DOCS.md](./DOCS.md)**.
 
 ---
 
-## 5. Programmatic API Exports
-
-In addition to the Astro integration default export, `astro-strict-csp` exports its modular utilities for custom post-processing pipelines or SSR middleware:
-
-```typescript
-import {
-  extractInlineStylesFromHtml,
-  extractInlineScriptsFromHtml,
-  extractInlineEventsFromHtml,
-  generateEventDispatcherScript,
-  createEventExtractionState,
-  injectSriIntoHtml,
-  formatCspDirectives,
-  injectCspMetaTag,
-  writeHeadersFile,
-  computeSriHash,
-  computeCssClass,
-  computeContentHash,
-  DEFAULT_STRICT_CSP_DIRECTIVES,
-} from "astro-strict-csp";
-```
-
----
-
-## 6. Development & Quality
-
-- **Lint & Format**: `npm run lint` / `npm run lint:fix` / `npm run format` (powered by [Biome](https://biomejs.dev))
-- **Test Suite**: `npm run test` / `npm run test:coverage` (47 passing tests, >98% coverage via [Vitest](https://vitest.dev))
-- **Build**: `npm run build` (ESM, CJS, and DTS bundles via [tsup](https://tsup.egoist.dev))
-- **Pre-publish Validation**: `npm run prepublishOnly` (runs Biome check, rebuilds bundles, and runs test suite)
-
----
-
-## 7. Contributing & Feedback
-
-Want to report a bug, suggest an improvement, or propose a new use case?
-
-> [!IMPORTANT]
-> **Please open an Issue rather than a Pull Request for now.**
-> As a solo maintainer, I am not currently able to review and maintain external PRs full-time. However, I actively review and close well-documented **[Issues](https://github.com/Evgenii-Zinner/astro-strict-csp/issues)** that include clear explanations, real-world use cases, and minimal reproductions.
-
-- Read my **[Contribution Guide](./.github/CONTRIBUTING.md)** for issue reporting guidelines.
-- Review the **[Code of Conduct](./.github/CODE_OF_CONDUCT.md)** before participating.
-
----
-
-## 8. License
+## License
 
 MIT © [Evgenii Zinner](https://github.com/Evgenii-Zinner)
-
-

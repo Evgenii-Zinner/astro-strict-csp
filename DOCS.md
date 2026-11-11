@@ -9,6 +9,7 @@
 1. [Architecture Overview & Pipeline](#1-architecture-overview--pipeline)
 2. [File-by-File Technical Reference](#2-file-by-file-technical-reference)
    - [`src/index.ts` (Astro Integration Hook)](#srcindexts)
+   - [`src/middleware.ts` (SSR Nonce & CSP Middleware)](#srcmiddlewarets)
    - [`src/extractor.ts` (Style & Script Extraction Engine)](#srcextractorts)
    - [`src/events.ts` (Inline Event Extractor & Runtime Dispatcher)](#srceventsts)
    - [`src/html-utils.ts` (Parsing, Masking & Entities)](#srchtml-utilsts)
@@ -90,6 +91,32 @@ The primary integration entry point connecting `astro-strict-csp` to the Astro e
 #### Exported Symbols
 - `default strictCsp(options?: StrictCspOptions): AstroIntegration`
 - Re-exports all utilities, types, and constants from child modules.
+
+---
+
+### `src/middleware.ts`
+Runtime Astro middleware executed on incoming HTTP requests when running in SSR mode (`output: "server"`).
+
+#### Architecture & Behavior
+- **Dynamic Nonce Generation**:
+  - Uses native Web Crypto `crypto.randomUUID()` to generate a unique 32-character hexadecimal nonce on every request.
+  - Injects `nonce` into `context.locals.nonce` for access in Astro layouts and page components (`Astro.locals.nonce`).
+- **Response Header Injection**:
+  - Intercepts outgoing `Response` objects.
+  - If the response content type contains `text/html`, formats and attaches `Content-Security-Policy` (or `Content-Security-Policy-Report-Only` when `reportOnly: true`).
+  - Automatically appends `'nonce-{random}'` to `script-src` (and optionally `style-src`).
+- **Route Exclusion**:
+  - Evaluates `options.exclude` against `context.url.pathname`.
+  - Supports string prefixes (`'/_emdash'`) and RegExp patterns (`/^\/api\/.*/`).
+  - Skips nonce creation and header injection entirely on matched routes.
+- **Vite Virtual Module Integration**:
+  - Lazily resolves `virtual:astro-strict-csp/config` injected by `astro:config:setup` to pick up user options configured in `astro.config.mjs`.
+
+#### Exported Symbols
+- `onRequest`: Standard Astro middleware handler export registered via `addMiddleware()`.
+- `createSsrCspMiddleware(options?: SsrCspOptions)`: Factory function to construct custom middleware instances.
+- `formatSsrCspDirectives(directives, nonce, options)`: Formats policy directives with dynamic nonces and strict-dynamic flags.
+- `DEFAULT_SSR_DIRECTIVES`: Default baseline strict CSP directives for SSR responses.
 
 ---
 
