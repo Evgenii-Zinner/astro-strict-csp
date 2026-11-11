@@ -32,6 +32,54 @@ describe('astro-strict-csp Comprehensive Test Suite', () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
+  interface SetupHookParams {
+    config: {
+      output?: 'server' | 'static';
+      build?: { inlineStylesheets?: 'always' | 'never' | 'auto' };
+    };
+    addMiddleware?: (options: { entrypoint: string; order?: 'pre' | 'post' }) => void;
+    updateConfig?: (options: {
+      vite?: {
+        plugins?: Array<{
+          name: string;
+          resolveId: (id: string) => string | undefined;
+          load: (id: string) => string | undefined;
+        }>;
+      };
+    }) => void;
+    logger?: {
+      info?: (msg: string) => void;
+      warn?: (msg: string) => void;
+      error?: (msg: string) => void;
+    };
+  }
+
+  interface BuildDoneHookParams {
+    dir: URL;
+    logger?: {
+      info?: (msg: string) => void;
+      warn?: (msg: string) => void;
+      error?: (msg: string) => void;
+    };
+  }
+
+  function getHook(
+    integration: ReturnType<typeof strictCsp>,
+    hookName: 'astro:config:setup',
+  ): (params: SetupHookParams) => void;
+  function getHook(
+    integration: ReturnType<typeof strictCsp>,
+    hookName: 'astro:build:done',
+  ): (params: BuildDoneHookParams) => Promise<void>;
+  function getHook(
+    integration: ReturnType<typeof strictCsp>,
+    hookName: 'astro:config:setup' | 'astro:build:done',
+  ) {
+    const hook = integration.hooks[hookName];
+    if (!hook) throw new Error(`Hook ${hookName} not found`);
+    return hook;
+  }
+
   // =========================================================================
   // 1. CRYPTO UTILITIES
   // =========================================================================
@@ -671,23 +719,6 @@ describe('astro-strict-csp Comprehensive Test Suite', () => {
   // 7. ASTRO INTEGRATION LIFECYCLE & HOOKS
   // =========================================================================
   describe('Astro Integration Lifecycle Hooks', () => {
-    function getHook(
-      integration: ReturnType<typeof strictCsp>,
-      hookName: 'astro:config:setup' | 'astro:build:done',
-    ) {
-      const hook = integration.hooks[hookName];
-      if (!hook) throw new Error(`Hook ${hookName} not found`);
-      return hook as (args: {
-        config?: { build?: { inlineStylesheets?: 'always' | 'never' | 'auto' } };
-        dir?: URL;
-        logger?: {
-          info?: (msg: string) => void;
-          warn?: (msg: string) => void;
-          error?: (msg: string) => void;
-        };
-      }) => Promise<void> | void;
-    }
-
     it('warns in astro:config:setup if build.inlineStylesheets is "always"', () => {
       const integration = strictCsp();
       const loggerWarn = vi.fn();
@@ -1121,6 +1152,101 @@ describe('astro-strict-csp Comprehensive Test Suite', () => {
       expect(reportHeader).toBeDefined();
       expect(reportHeader).toContain("'strict-dynamic'");
       expect(reportHeader).toContain(`'nonce-${(context.locals as { nonce?: string }).nonce}'`);
+    });
+
+    it('tests virtual module resolution and onRequest export directly', async () => {
+      const { onRequest } = await import('../src/middleware.js');
+      const context = {
+        url: new URL('https://example.com/page'),
+        locals: {},
+      };
+
+      const response = await onRequest(context, async () => {
+        return new Response('<!DOCTYPE html><html><body>Test</body></html>', {
+          headers: { 'content-type': 'text/html' },
+        });
+      });
+
+      expect(response.headers.get('content-security-policy')).toBeDefined();
+      expect(context.locals).toHaveProperty('nonce');
+    });
+
+    it('handles RegExp exclusions and string directives in formatSsrCspDirectives', async () => {
+      const { createSsrCspMiddleware, formatSsrCspDirectives } = await import(
+        '../src/middleware.js'
+      );
+      const middleware = createSsrCspMiddleware({
+        exclude: [/^\/api\/.*/],
+      });
+
+      const context = {
+        url: new URL('https://example.com/api/v1/users'),
+        locals: {},
+      };
+
+      const response = await middleware(context, async () => {
+        return new Response('<!DOCTYPE html><html>Api</html>', {
+          headers: { 'content-type': 'text/html' },
+        });
+      });
+
+      expect(response.headers.get('content-security-policy')).toBeNull();
+
+      // Test formatSsrCspDirectives branches: boolean true, string values, injectScriptNonce: false
+      const formatted = formatSsrCspDirectives(
+        {
+          'default-src': "'self'",
+          'script-src': "'self' https://trusted.org",
+          'upgrade-insecure-requests': true,
+          'block-all-mixed-content': false,
+        },
+        'testnonce123',
+        { injectScriptNonce: false },
+      );
+
+      expect(formatted).toContain("default-src 'self'");
+      expect(formatted).toContain('upgrade-insecure-requests');
+      expect(formatted).not.toContain('testnonce123');
+      expect(formatted).not.toContain('block-all-mixed-content');
+    });
+
+    it('exercises virtual plugin resolveId and load hooks in index.ts', () => {
+      interface VitePlugin {
+        name: string;
+        resolveId: (id: string) => string | undefined;
+        load: (id: string) => string | undefined;
+      }
+      let capturedPlugins: VitePlugin[] = [];
+      const updateConfig = (cfg: { vite?: { plugins?: VitePlugin[] } }) => {
+        capturedPlugins = cfg?.vite?.plugins || [];
+      };
+      const addMiddleware = vi.fn();
+      const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
+
+      const integration = strictCsp({ ssr: { exclude: ['/admin'] } });
+      const setupHook = getHook(integration, 'astro:config:setup');
+
+      setupHook({
+        config: { output: 'server' },
+        addMiddleware,
+        updateConfig,
+        logger,
+      });
+
+      expect(capturedPlugins).toHaveLength(1);
+      const plugin = capturedPlugins[0];
+      expect(plugin.name).toBe('astro-strict-csp-virtual-config');
+
+      // Test resolveId
+      const resolved = plugin.resolveId('virtual:astro-strict-csp/config');
+      expect(resolved).toBe('\0virtual:astro-strict-csp/config');
+      expect(plugin.resolveId('other-module')).toBeUndefined();
+
+      // Test load
+      const loaded = plugin.load('\0virtual:astro-strict-csp/config');
+      expect(loaded).toContain('export const ssrOptions =');
+      expect(loaded).toContain('/admin');
+      expect(plugin.load('other-module')).toBeUndefined();
     });
   });
 });
