@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.0](https://github.com/Evgenii-Zinner/astro-strict-csp/compare/v0.2.0...v0.3.0) (2026-11-11)
+
+
+### Features
+
+* add SSR support with dynamic nonce middleware and CSP headers ([#15](https://github.com/Evgenii-Zinner/astro-strict-csp/issues/15)) ([b8a6070](https://github.com/Evgenii-Zinner/astro-strict-csp/commit/b8a60700682a9ddce64491e281efeb2a69487163))
+
 ## [0.2.0](https://github.com/Evgenii-Zinner/astro-strict-csp/compare/v0.1.3...v0.2.0) (2026-10-19)
 
 
